@@ -1,0 +1,1181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Light Fingers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #14121c; color: #cfc8e0; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center;
+         font-family: "Press Start 2P", monospace; }
+  #game { image-rendering: pixelated; image-rendering: crisp-edges; display: block;
+          max-width: 100vw; max-height: calc(100vh - 40px); aspect-ratio: 960 / 672;
+          border: 3px solid #3a3450; box-shadow: 0 0 0 3px #0a0910, 0 12px 40px #000; }
+  #help { font-size: 9px; line-height: 1.8; opacity: .7; margin-top: 10px; text-align: center; padding: 0 16px; }
+</style>
+</head>
+<body>
+<canvas id="game" width="960" height="672"></canvas>
+<div id="help">ARROWS/WASD move &middot; SHIFT (hold) / C (toggle) crouch &middot; SPACE / E act &middot; H controls</div>
+<script>
+(() => {
+'use strict';
+// ====================================================================
+//  CONSTANTS
+// ====================================================================
+const TS = 16, SCALE = 3;
+const VW = 20, VH = 14;                // view size in tiles
+const BW = VW * TS, BH = VH * TS;      // low-res buffer
+const MW = 44, MH = 34;                // map size
+const SPAWN = { x: 21, y: 31 };
+const DX = [0, -1, 1, 0], DY = [1, 0, 0, -1]; // 0 down,1 left,2 right,3 up
+
+const T = { GRASS:0, PATH:1, STONE:2, WATER:3, FLOWER:4, TREE:5, BUSH:6, BARREL:7, FENCE:8, BLD:9, DOOR:10 };
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+const buf = document.createElement('canvas'); buf.width = BW; buf.height = BH;
+const g = buf.getContext('2d');
+g.imageSmoothingEnabled = false;
+
+// seeded rng for map decoration
+let seed = 1337;
+const srand = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+const rand = (a, b) => a + Math.random() * (b - a);
+const randi = (a, b) => Math.floor(rand(a, b + 1));
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const hash = (x, y) => { let h = x * 374761393 + y * 668265263; h = (h ^ (h >> 13)) * 1274126177; return (h ^ (h >> 16)) >>> 0; };
+
+// ====================================================================
+//  AUDIO (tiny beeps)
+// ====================================================================
+let actx = null;
+function beep(freq, dur = 0.08, type = 'square', vol = 0.05, slide = 0) {
+  try {
+    if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = actx.createOscillator(), gn = actx.createGain();
+    o.type = type; o.frequency.value = freq;
+    if (slide) o.frequency.linearRampToValueAtTime(freq + slide, actx.currentTime + dur);
+    gn.gain.value = vol; gn.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
+    o.connect(gn); gn.connect(actx.destination); o.start(); o.stop(actx.currentTime + dur);
+  } catch (e) {}
+}
+const sfx = {
+  alert: () => { beep(880, 0.08); setTimeout(() => beep(1320, 0.12), 70); },
+  coin: () => { beep(1046, 0.06, 'square', 0.04); setTimeout(() => beep(1568, 0.1, 'square', 0.04), 60); },
+  fail: () => beep(220, 0.25, 'sawtooth', 0.05, -120),
+  blip: () => beep(660, 0.02, 'square', 0.015),
+  caught: () => { beep(300, 0.15, 'sawtooth', 0.06); setTimeout(() => beep(180, 0.3, 'sawtooth', 0.06), 140); },
+  select: () => beep(990, 0.05, 'square', 0.03),
+};
+
+// ====================================================================
+//  MAP
+// ====================================================================
+const map = new Uint8Array(MW * MH);
+const bmap = new Int16Array(MW * MH).fill(-1);
+const at = (x, y) => (x < 0 || y < 0 || x >= MW || y >= MH) ? T.TREE : map[y * MW + x];
+const set = (x, y, t) => { if (x >= 0 && y >= 0 && x < MW && y < MH) map[y * MW + x] = t; };
+const rect = (x0, y0, x1, y1, t) => { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) set(x, y, t); };
+
+const buildings = [];
+function addBuilding(x, y, w, h, doorX, type, name) {
+  const b = { x, y, w, h, doorX, doorY: y + h - 1, type, name, id: buildings.length };
+  buildings.push(b);
+  for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) { set(xx, yy, T.BLD); bmap[yy * MW + xx] = b.id; }
+  set(doorX, y + h - 1, T.DOOR);
+  return b;
+}
+
+function buildMap() {
+  map.fill(T.GRASS);
+  // forest borders
+  rect(0, 0, 1, MH - 1, T.TREE); rect(MW - 2, 0, MW - 1, MH - 1, T.TREE);
+  rect(0, 0, MW - 1, 0, T.TREE); rect(0, MH - 2, MW - 1, MH - 1, T.TREE);
+  rect(20, MH - 2, 22, MH - 1, T.PATH);             // town entrance gap
+  // east forest edge
+  for (let y = 10; y < MH - 2; y++) for (let x = 36; x < MW - 2; x++) {
+    const r = srand(), edge = (x - 36) / 6;
+    if (r < 0.15 + edge * 0.55) set(x, y, T.TREE); else if (r < 0.32 + edge * 0.4) set(x, y, T.BUSH);
+  }
+  // west thicket
+  for (let y = 11; y < 21; y++) for (let x = 2; x < 4; x++) {
+    const r = srand(); if (r < 0.35) set(x, y, T.TREE); else if (r < 0.6) set(x, y, T.BUSH);
+  }
+  // roads
+  rect(20, 12, 22, MH - 1, T.PATH);
+  rect(4, 17, 35, 18, T.PATH);
+  rect(6, 8, 6, 16, T.PATH);
+  rect(34, 7, 34, 16, T.PATH);
+  rect(22, 27, 31, 27, T.PATH);
+  rect(6, 26, 13, 26, T.PATH); rect(13, 19, 13, 30, T.PATH);
+  // plaza
+  rect(15, 12, 27, 22, T.STONE);
+  rect(20, 14, 22, 15, T.WATER);                    // fountain
+  // mansion grounds
+  rect(13, 2, 29, 10, T.GRASS);
+  for (let y = 7; y <= 10; y++) for (let x = 13; x <= 29; x++) if (srand() < 0.12) set(x, y, T.FLOWER);
+  rect(21, 7, 21, 11, T.STONE); rect(15, 8, 27, 8, T.PATH); rect(15, 10, 27, 10, T.PATH);
+  rect(15, 8, 15, 10, T.PATH); rect(27, 8, 27, 10, T.PATH);
+  rect(12, 1, 30, 1, T.FENCE); rect(12, 1, 12, 11, T.FENCE); rect(30, 1, 30, 11, T.FENCE);
+  rect(12, 11, 30, 11, T.FENCE); rect(20, 11, 22, 11, T.STONE);
+  [[13, 7], [29, 7], [17, 7], [25, 7], [13, 10], [29, 10], [18, 9], [24, 9]].forEach(([x, y]) => set(x, y, T.BUSH));
+  // buildings
+  addBuilding(15, 2, 13, 5, 21, 'mansion', "Lord's Mansion");
+  addBuilding(3, 2, 7, 6, 6, 'church', 'Church');
+  addBuilding(32, 2, 6, 5, 34, 'house', 'House');
+  addBuilding(28, 21, 8, 6, 31, 'tavern', 'The Tipsy Goose');
+  addBuilding(4, 21, 6, 5, 6, 'house', 'House');
+  addBuilding(10, 26, 6, 5, 12, 'house', 'House');
+  set(12, 31, T.PATH);
+  // flowers & scatter
+  for (let i = 0; i < 70; i++) {
+    const x = 2 + Math.floor(srand() * 34), y = 2 + Math.floor(srand() * 30);
+    if (at(x, y) === T.GRASS) set(x, y, T.FLOWER);
+  }
+  // bushes (hiding spots)
+  [[10, 4], [10, 6], [2, 9], [11, 9], [14, 13], [14, 14], [14, 20], [19, 25], [23, 29], [24, 24],
+   [8, 19], [11, 15], [16, 26], [26, 30], [31, 10], [27, 15], [3, 27], [8, 30], [31, 30]].forEach(([x, y]) => set(x, y, T.BUSH));
+  // barrels
+  [[27, 21], [27, 22], [10, 22], [10, 23], [16, 12], [26, 12], [8, 8], [36, 22], [36, 24], [17, 30], [37, 5]].forEach(([x, y]) => set(x, y, T.BARREL));
+  set(SPAWN.x, SPAWN.y, T.PATH);
+}
+buildMap();
+
+const solidP = t => t === T.TREE || t === T.WATER || t === T.FENCE || t === T.BLD || t === T.DOOR;
+const solidN = t => solidP(t) || t === T.BARREL;
+const opaque = t => t === T.TREE || t === T.BLD || t === T.DOOR;
+
+// ====================================================================
+//  PIXEL ART (procedural placeholder sprites)
+// ====================================================================
+function mk(w, h, fn) { const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d'); fn(x); return c; }
+const P = (c, x, y, col, w = 1, h = 1) => { c.fillStyle = col; c.fillRect(x, y, w, h); };
+
+function grassTile(v, flower) {
+  return mk(16, 16, c => {
+    P(c, 0, 0, '#5c9e3e', 16, 16);
+    let s = 99 + v * 31;
+    const r = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+    for (let i = 0; i < 14; i++) P(c, Math.floor(r() * 16), Math.floor(r() * 16), r() < .5 ? '#6db54b' : '#4c8a33');
+    for (let i = 0; i < 2; i++) { const x = Math.floor(r() * 13), y = 2 + Math.floor(r() * 12); P(c, x, y, '#7cc457'); P(c, x + 2, y - 1, '#7cc457'); P(c, x + 1, y + 1, '#4c8a33'); }
+    if (flower) {
+      const cols = ['#f05a5a', '#f5d742', '#ffffff', '#c78bf0'];
+      for (let i = 0; i < 3; i++) { const x = 2 + Math.floor(r() * 11), y = 2 + Math.floor(r() * 11), col = cols[Math.floor(r() * 4)];
+        P(c, x, y + 1, '#3d7a2a'); P(c, x - 1, y, col); P(c, x + 1, y, col); P(c, x, y - 1, col); P(c, x, y, '#fff3a0'); }
+    }
+  });
+}
+function pathTile(v) {
+  return mk(16, 16, c => {
+    P(c, 0, 0, '#c9a46a', 16, 16);
+    let s = 7 + v * 13; const r = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+    for (let i = 0; i < 12; i++) P(c, Math.floor(r() * 16), Math.floor(r() * 16), r() < .5 ? '#b58f56' : '#d9b981');
+    for (let i = 0; i < 2; i++) { const x = Math.floor(r() * 14), y = Math.floor(r() * 14); P(c, x, y, '#9c7a48', 2, 1); P(c, x, y - 1 < 0 ? 0 : y - 1, '#e2c592', 2, 1); }
+  });
+}
+const stoneTile = mk(16, 16, c => {
+  P(c, 0, 0, '#a3a1ac', 16, 16);
+  P(c, 0, 0, '#86848f', 16, 1); P(c, 0, 8, '#86848f', 16, 1);
+  P(c, 0, 0, '#86848f', 1, 8); P(c, 8, 8, '#86848f', 1, 8);
+  P(c, 1, 1, '#b9b7c2', 6, 1); P(c, 9, 9, '#b9b7c2', 6, 1); P(c, 1, 9, '#b9b7c2', 6, 1); P(c, 9, 1, '#b9b7c2', 6, 1);
+  P(c, 5, 4, '#94929d'); P(c, 12, 12, '#94929d'); P(c, 3, 13, '#94929d');
+});
+function waterTile(f) {
+  return mk(16, 16, c => {
+    P(c, 0, 0, '#3b78c8', 16, 16);
+    for (let i = 0; i < 4; i++) { const y = (i * 4 + f * 2) % 16, x = (i * 5 + f * 3) % 12; P(c, x, y, '#79b0f0', 4, 1); P(c, x + 1, y + 1, '#5592de', 3, 1); }
+  });
+}
+const grassT = [0, 1, 2, 3].map(v => grassTile(v, false));
+const flowerT = [0, 1, 2].map(v => grassTile(v + 10, true));
+const pathT = [0, 1, 2].map(pathTile);
+const waterT = [0, 1, 2, 3].map(waterTile);
+
+const treeSpr = mk(16, 32, c => {
+  P(c, 3, 29, 'rgba(0,0,0,.25)', 11, 3);
+  P(c, 6, 20, '#4a2e17', 5, 11); P(c, 7, 20, '#6b4426', 3, 10); P(c, 7, 21, '#80562f', 1, 8);
+  const rows = [[5, 6], [3, 10], [2, 12], [1, 14], [1, 14], [0, 16], [0, 16], [0, 16], [0, 16], [0, 16], [0, 16], [1, 14], [1, 14], [1, 14], [2, 12], [2, 12], [3, 10], [4, 8], [6, 4]];
+  rows.forEach(([x, w], i) => P(c, x, 2 + i, '#1f4a1c', w, 1));
+  rows.forEach(([x, w], i) => { if (i > 0 && i < rows.length - 2) P(c, x + 1, 2 + i, '#2f6b2a', w - 2, 1); });
+  rows.forEach(([x, w], i) => { if (i > 1 && i < 10) P(c, x + 2, 2 + i, '#3f8a35', Math.max(1, w - 7), 1); });
+  P(c, 4, 6, '#5aa848', 2, 1); P(c, 3, 7, '#5aa848', 1, 1); P(c, 8, 4, '#5aa848', 2, 1); P(c, 11, 10, '#3f8a35', 2, 2);
+  P(c, 2, 17, '#244f20', 12, 1); P(c, 9, 15, '#244f20', 3, 1);
+});
+const bushSpr = mk(16, 16, c => {
+  P(c, 2, 14, 'rgba(0,0,0,.25)', 12, 2);
+  const rows = [[5, 6], [3, 10], [2, 12], [1, 14], [1, 14], [0, 16], [0, 16], [0, 16], [1, 14], [1, 14], [2, 12]];
+  rows.forEach(([x, w], i) => P(c, x, 3 + i, '#255c22', w, 1));
+  rows.forEach(([x, w], i) => { if (i > 0 && i < rows.length - 1) P(c, x + 1, 3 + i, '#3a8a32', w - 2, 1); });
+  P(c, 4, 5, '#5ab34a', 3, 1); P(c, 3, 6, '#5ab34a', 2, 1); P(c, 9, 6, '#5ab34a', 2, 1); P(c, 6, 9, '#4aa03e', 2, 1);
+  P(c, 11, 8, '#d94848'); P(c, 5, 11, '#d94848'); P(c, 9, 11, '#d94848');
+  P(c, 1, 12, '#1d4a1a', 14, 1);
+});
+function barrelSpr(occupied) {
+  return mk(16, 16, c => {
+    P(c, 2, 14, 'rgba(0,0,0,.3)', 12, 2);
+    P(c, 3, 3, '#3a220e', 10, 12); P(c, 2, 5, '#3a220e', 12, 8);
+    P(c, 4, 4, '#8a5a2c', 8, 10); P(c, 3, 6, '#8a5a2c', 10, 6);
+    P(c, 5, 4, '#a8743c', 2, 10); P(c, 3, 6, '#9a6634', 1, 6);
+    P(c, 3, 6, '#4a4a52', 10, 1); P(c, 3, 11, '#4a4a52', 10, 1);
+    P(c, 4, 6, '#7a7a84', 3, 1); P(c, 4, 11, '#7a7a84', 3, 1);
+    if (occupied) { // lid ajar, eyes peeking
+      P(c, 3, 1, '#3a220e', 10, 3); P(c, 4, 1, '#b07c44', 8, 2);
+      P(c, 4, 3, '#140c06', 8, 2); P(c, 6, 3, '#fff', 1, 1); P(c, 9, 3, '#fff', 1, 1);
+    } else { P(c, 4, 3, '#b07c44', 8, 2); P(c, 5, 3, '#c89458', 4, 1); }
+  });
+}
+const barrelS = barrelSpr(false), barrelO = barrelSpr(true);
+function fenceSpr(l, r, u, d) {
+  return mk(16, 20, c => {
+    const wood = '#a07848', dark = '#5e4226', lite = '#c49a64';
+    if (l) { P(c, 0, 8, dark, 8, 4); P(c, 0, 8, lite, 8, 1); P(c, 0, 9, wood, 8, 2); }
+    if (r) { P(c, 8, 8, dark, 8, 4); P(c, 8, 8, lite, 8, 1); P(c, 8, 9, wood, 8, 2); }
+    if (u) { P(c, 7, 0, dark, 3, 10); P(c, 7, 0, wood, 2, 10); }
+    if (d) { P(c, 7, 10, dark, 3, 10); P(c, 7, 10, wood, 2, 10); }
+    P(c, 6, 4, dark, 5, 14); P(c, 7, 4, wood, 3, 13); P(c, 7, 4, lite, 1, 12); P(c, 6, 3, lite, 5, 1);
+    P(c, 5, 17, 'rgba(0,0,0,.25)', 7, 2);
+  });
+}
+const fenceCache = {};
+function getFence(x, y) {
+  const f = (a, b) => at(a, b) === T.FENCE;
+  const k = '' + +f(x - 1, y) + +f(x + 1, y) + +f(x, y - 1) + +f(x, y + 1);
+  return fenceCache[k] || (fenceCache[k] = fenceSpr(f(x - 1, y), f(x + 1, y), f(x, y - 1), f(x, y + 1)));
+}
+
+// Buildings: roof + front wall, drawn as one sprite for a 2.5D look
+const BSTYLE = {
+  mansion: { roof: '#4a3f8a', roofD: '#2f2760', roofL: '#6a5fb0', wall: '#e4dac4', wallD: '#b8aa8c', trim: '#e0b840', door: '#5a2e1a' },
+  church:  { roof: '#5a6a80', roofD: '#3a4658', roofL: '#7c8ca4', wall: '#d8d4ca', wallD: '#a8a296', trim: '#c8c0b0', door: '#6a4020' },
+  tavern:  { roof: '#9a3a28', roofD: '#682418', roofL: '#c05a40', wall: '#d2a874', wallD: '#8a6438', trim: '#5a3a1c', door: '#4a2a14' },
+  house:   { roof: '#c0602c', roofD: '#843e1a', roofL: '#e08248', wall: '#eadcbc', wallD: '#b0a080', trim: '#7a5430', door: '#6a4020' },
+};
+function buildingSpr(b) {
+  const s = BSTYLE[b.type], W = b.w * TS, H = b.h * TS + 8;
+  return mk(W, H, c => {
+    const wallH = 24, roofH = H - wallH;
+    // wall
+    P(c, 0, roofH, s.wallD, W, wallH); P(c, 1, roofH, s.wall, W - 2, wallH - 2);
+    P(c, 1, H - 3, s.wallD, W - 2, 1);
+    if (b.type === 'tavern' || b.type === 'house') for (let x = 0; x < W; x += 16) P(c, x, roofH, s.trim, 2, wallH);
+    if (b.type === 'mansion') for (let x = 8; x < W; x += 32) { P(c, x, roofH, '#fff8e8', 4, wallH - 2); P(c, x + 3, roofH, s.wallD, 1, wallH - 2); }
+    // windows
+    for (let tx = 0; tx < b.w; tx++) {
+      const wx = b.x + tx; if (Math.abs(wx - b.doorX) < 1 || (tx % 2 === 0 && b.w > 2 && tx !== 0 && tx !== b.w - 1) || tx === 0 || tx === b.w - 1) continue;
+      const x = tx * 16 + 4, y = roofH + 6;
+      if (b.type === 'church') { P(c, x + 1, y - 2, '#3a3040', 6, 12); P(c, x + 2, y - 3, '#3a3040', 4, 1); P(c, x + 2, y - 1, '#c04a6a', 2, 5); P(c, x + 4, y - 1, '#4a7ac0', 2, 5); P(c, x + 2, y + 4, '#e0c040', 4, 5); continue; }
+      P(c, x, y, s.trim, 8, 8); P(c, x + 1, y + 1, '#6aa0d8', 6, 6); P(c, x + 1, y + 1, '#a8d0f0', 2, 2); P(c, x + 4, y + 1, s.trim, 1, 6); P(c, x + 1, y + 4, s.trim, 6, 1);
+      P(c, x - 1, y + 8, s.wallD, 10, 1);
+    }
+    // door
+    const dx = (b.doorX - b.x) * 16 + 3, dy = H - 16;
+    P(c, dx - 1, dy - 1, s.trim, 12, 17); P(c, dx, dy, s.door, 10, 16); P(c, dx + 4, dy, '#000', 1, 16);
+    P(c, dx + 1, dy + 1, 'rgba(255,255,255,.12)', 2, 14); P(c, dx + 7, dy + 8, '#e0c040', 1, 1);
+    if (b.type === 'church') { P(c, dx, dy - 3, s.door, 10, 3); P(c, dx + 2, dy - 4, s.door, 6, 1); }
+    // roof
+    P(c, 0, 0, s.roofD, W, roofH);
+    P(c, 1, 1, s.roof, W - 2, roofH - 2);
+    for (let y = 4; y < roofH - 3; y += 4) {
+      P(c, 1, y, s.roofD, W - 2, 1);
+      for (let x = ((y / 4) % 2) * 4 + 2; x < W - 2; x += 8) P(c, x, y - 3, s.roofD, 1, 3);
+      P(c, 2, y - 3, s.roofL, W - 4, 1);
+    }
+    P(c, 0, 0, s.roofL, W, 2); P(c, 0, roofH - 3, s.roofD, W, 3); P(c, 0, roofH, 'rgba(0,0,0,.25)', W, 3);
+    if (b.type === 'mansion') { P(c, 0, roofH - 3, s.trim, W, 1); P(c, W / 2 - 6, 2, s.trim, 12, 10); P(c, W / 2 - 4, 4, s.roofD, 8, 6); P(c, W / 2 - 1, 5, s.trim, 2, 4);
+      [16, W - 24].forEach(x => { P(c, x, roofH, '#8a2030', 8, 14); P(c, x + 2, roofH + 3, s.trim, 4, 4); P(c, x, roofH + 14, '#8a2030', 3, 2); P(c, x + 5, roofH + 14, '#8a2030', 3, 2); }); }
+    if (b.type === 'church') { const cx = W / 2; P(c, cx - 1, 2, '#3a3040', 4, 16); P(c, cx - 5, 6, '#3a3040', 12, 4); P(c, cx, 3, '#f0e0a0', 2, 14); P(c, cx - 4, 7, '#f0e0a0', 10, 2); }
+    if (b.type === 'tavern') { const sx = dx + 13; P(c, sx, roofH + 1, '#3a2010', 12, 1); P(c, sx + 1, roofH + 2, '#5a3a1c', 10, 9); P(c, sx + 3, roofH + 3, '#e0b040', 5, 6); P(c, sx + 8, roofH + 4, '#e0b040', 1, 3); P(c, sx + 3, roofH + 3, '#fff', 5, 2); }
+    if (b.type === 'house') { P(c, W - 14, 0, '#6a5a50', 6, 8); P(c, W - 13, 0, '#8a7a70', 4, 2); }
+  });
+}
+const bldSpr = buildings.map(buildingSpr);
+
+// ====================================================================
+//  CHARACTER SPRITES (drawn live)
+// ====================================================================
+function drawChar(c, e, x, y) {
+  x = Math.round(x); y = Math.round(y);
+  const d = e.dir, walking = e.moving, frame = walking ? (Math.floor(e.animT * 8) % 2) : 0;
+  const crouch = e.crouch ? 3 : 0;
+  const pal = e.pal;
+  const O = '#1a1420';
+  // shadow
+  c.fillStyle = 'rgba(0,0,0,.3)'; c.fillRect(x + 3, y + 14, 10, 2); c.fillRect(x + 4, y + 13, 8, 1);
+  const bob = walking && frame ? -1 : 0;
+  const by = y + bob + crouch;
+  // legs
+  if (!e.crouch) {
+    const l1 = walking ? (frame ? 1 : -1) : 0;
+    P(c, x + 5, by + 11, O, 3, 4 + (l1 > 0 ? 0 : 1)); P(c, x + 8, by + 11, O, 3, 4 + (l1 > 0 ? 1 : 0));
+    P(c, x + 6, by + 11, pal.legs, 1, 3 + (l1 > 0 ? 0 : 1)); P(c, x + 9, by + 11, pal.legs, 1, 3 + (l1 > 0 ? 1 : 0));
+  } else { P(c, x + 4, by + 10, O, 8, 3); P(c, x + 5, by + 10, pal.legs, 6, 2); }
+  // robe / cape behind
+  if (e.type === 'lord') { P(c, x + 3, by + 7, O, 10, 8); P(c, x + 4, by + 7, pal.body, 8, 7); P(c, x + 4, by + 13, pal.trim, 8, 1); }
+  if (e.type === 'adventurer' && d !== 0) { P(c, x + 4, by + 7, O, 8, 7); P(c, x + 5, by + 7, pal.cape, 6, 6); }
+  // body
+  P(c, x + 4, by + 6, O, 8, 6); P(c, x + 5, by + 6, pal.body, 6, 5);
+  P(c, x + 5, by + 6, pal.bodyL || pal.body, 2, 4);
+  if (e.type === 'guard') { P(c, x + 6, by + 7, pal.trim, 4, 4); P(c, x + 7, by + 8, '#f0d060', 2, 2); }
+  if (e.type === 'villager') P(c, x + 6, by + 8, pal.trim, 4, 3);
+  if (e.type === 'player') P(c, x + 5, by + 6, '#a83232', 6, 1); // scarf
+  // arms
+  if (d === 1 || d === 2) { const ax = d === 1 ? x + 6 : x + 8; P(c, ax, by + 7, O, 2, 4); P(c, ax, by + 7, pal.skin, 2, 1); }
+  else { P(c, x + 3, by + 7, O, 2, 4); P(c, x + 11, by + 7, O, 2, 4); P(c, x + 3, by + 10, pal.skin, 2, 1); P(c, x + 11, by + 10, pal.skin, 2, 1); }
+  // weapon
+  if (e.type === 'guard') { const sx = d === 1 ? x + 2 : x + 13; P(c, sx, by - 4, '#6b4426', 1, 16); P(c, sx - 1, by - 6, '#c8ccd8', 3, 3); P(c, sx, by - 7, '#e8ecf8', 1, 1); }
+  if (e.type === 'adventurer' && d !== 3) { const sx = d === 1 ? x + 11 : x + 3; P(c, sx, by + 3, '#d8dce8', 1, 6); P(c, sx - 1, by + 8, '#7a5a2a', 3, 1); }
+  // head
+  P(c, x + 4, by, O, 8, 7); P(c, x + 5, by + 1, pal.skin, 6, 5);
+  // hair / hat
+  const hc = pal.hair;
+  if (d === 3) P(c, x + 5, by + 1, hc, 6, 5);
+  else {
+    P(c, x + 5, by + 1, hc, 6, 2);
+    if (d === 1) P(c, x + 9, by + 1, hc, 2, 4); else if (d === 2) P(c, x + 5, by + 1, hc, 2, 4);
+    else { P(c, x + 5, by + 1, hc, 1, 3); P(c, x + 10, by + 1, hc, 1, 3); }
+    // eyes
+    if (d === 0) { P(c, x + 6, by + 4, O); P(c, x + 9, by + 4, O); }
+    else if (d === 1) P(c, x + 5, by + 4, O); else P(c, x + 10, by + 4, O);
+  }
+  if (e.type === 'guard') { P(c, x + 4, by - 1, O, 8, 3); P(c, x + 5, by - 1, '#8890a0', 6, 2); P(c, x + 7, by - 2, '#a03030', 2, 1); }
+  if (e.type === 'lord') { P(c, x + 5, by - 2, '#e0c040', 6, 2); P(c, x + 5, by - 3, '#e0c040'); P(c, x + 7, by - 3, '#e0c040'); P(c, x + 10, by - 3, '#e0c040'); P(c, x + 8, by - 2, '#d03030'); }
+  if (e.type === 'player') { P(c, x + 4, by, pal.hair, 8, 2); if (d !== 3) P(c, x + 4, by + 2, pal.hair, 1, 3), P(c, x + 11, by + 2, pal.hair, 1, 3); }
+}
+
+const PAL = {
+  player: { body: '#3e4e44', bodyL: '#4e6054', legs: '#2a2a32', skin: '#f0c8a0', hair: '#2c3a30' },
+  guard: { body: '#8890a0', bodyL: '#a8b0c0', legs: '#4a4a58', skin: '#e8b890', hair: '#5a4030', trim: '#a03030' },
+  lord: { body: '#6a2a8a', bodyL: '#8a4aaa', legs: '#3a1a4a', skin: '#f0d0b0', hair: '#d8d0c0', trim: '#e0c040' },
+};
+function advPal() {
+  const b = pick([['#3a62c0', '#5a82e0'], ['#c04040', '#e06060'], ['#3a9a5a', '#5aba7a'], ['#c08a30', '#e0aa50'], ['#8a4ab0', '#aa6ad0']]);
+  return { body: b[0], bodyL: b[1], legs: '#3a3040', skin: pick(['#f0c8a0', '#d8a070', '#a87048', '#f8d8b8']), hair: pick(['#f0d060', '#3a2a1a', '#a04020', '#e0e0e0', '#2a2a2a']), cape: pick(['#a02a2a', '#2a4a8a', '#5a3a1a', '#2a6a3a']) };
+}
+function vilPal() {
+  return { body: pick(['#8a6a4a', '#a08060', '#6a7a5a', '#9a7a8a']), legs: '#4a3a2a', skin: pick(['#f0c8a0', '#d8a070', '#b07850']), hair: pick(['#5a3a1a', '#9a9a9a', '#d0a040', '#2a2a2a']), trim: '#e8e0d0' };
+}
+
+// ====================================================================
+//  GAME STATE
+// ====================================================================
+let justice = 0;          // hidden. never displayed.
+let gold = 15;
+const bag = [];
+let vaultLooted = false, keyTaken = false;
+let time = 0;
+let mode = 'play';        // play | dialogue | minigame | fade
+const npcs = [];
+const floaters = [];
+let camX = 0, camY = 0;
+let grace = 0;
+let showHelp = false;
+
+const tier = () => justice < -40 ? 0 : justice < -10 ? 1 : justice < 20 ? 2 : justice < 50 ? 3 : 4;
+const lootMult = () => clamp(1 + justice / 80, 0.5, 2.25);
+
+function makeEntity(type, x, y, extra = {}) {
+  return Object.assign({ type, x, y, fx: x, fy: y, px: x * TS, py: y * TS, dir: 0, moving: false, mt: 0, moveDur: 0.4,
+    animT: 0, crouch: false, path: [], pal: PAL[type] }, extra);
+}
+const player = makeEntity('player', SPAWN.x, SPAWN.y, { dir: 3, moveDur: 0.15 });
+
+function isHidden() {
+  const t = at(player.x, player.y);
+  return t === T.BARREL || (t === T.BUSH && player.crouch);
+}
+
+// ---------- pathfinding ----------
+function occupied(x, y, self) {
+  if (self !== player && ((player.x === x && player.y === y) || (player.moving && player.fx === x && player.fy === y))) return true;
+  for (const n of npcs) if (n !== self && ((n.x === x && n.y === y) || (n.moving && n.fx === x && n.fy === y))) return true;
+  return false;
+}
+function bfs(sx, sy, tx, ty, self, avoidOthers) {
+  if (sx === tx && sy === ty) return [];
+  const prev = new Int32Array(MW * MH).fill(-1), start = sy * MW + sx, goal = ty * MW + tx;
+  const q = [start]; prev[start] = start;
+  for (let qi = 0; qi < q.length; qi++) {
+    const cur = q[qi]; if (cur === goal) break;
+    const cx = cur % MW, cy = (cur / MW) | 0;
+    for (let d = 0; d < 4; d++) {
+      const nx = cx + DX[d], ny = cy + DY[d], ni = ny * MW + nx;
+      if (nx < 0 || ny < 0 || nx >= MW || ny >= MH || prev[ni] !== -1) continue;
+      if (solidN(map[ni]) && ni !== goal) continue;
+      if (avoidOthers && ni !== goal && occupied(nx, ny, self)) continue;
+      prev[ni] = cur; q.push(ni);
+    }
+  }
+  if (prev[goal] === -1) return null;
+  const path = []; let c = goal;
+  while (c !== start) { path.push({ x: c % MW, y: (c / MW) | 0 }); c = prev[c]; }
+  return path.reverse();
+}
+
+// ---------- vision ----------
+function los(x0, y0, x1, y1) {
+  let dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = dx + dy;
+  while (true) {
+    if (x0 === x1 && y0 === y1) return true;
+    const e2 = 2 * err; if (e2 >= dy) { err += dy; x0 += sx; } if (e2 <= dx) { err += dx; y0 += sy; }
+    if (x0 === x1 && y0 === y1) return true;
+    if (opaque(at(x0, y0))) return false;
+  }
+}
+function coneTiles(n) {
+  const out = [], fx = DX[n.dir], fy = DY[n.dir], sx = -fy, sy = fx;
+  for (let d = 1; d <= n.range; d++) {
+    const hw = d >= 4 ? 2 : d >= 2 ? 1 : 0;
+    for (let o = -hw; o <= hw; o++) {
+      const tx = n.x + fx * d + sx * o, ty = n.y + fy * d + sy * o;
+      if (opaque(at(tx, ty))) continue;
+      if (!los(n.x, n.y, tx, ty)) continue;
+      out.push({ x: tx, y: ty, d });
+    }
+  }
+  return out;
+}
+function canSee(n) {
+  if (isHidden() || grace > 0) return false;
+  const eff = n.range - (player.crouch ? 1 : 0);
+  for (const t of n.cone) if (t.x === player.x && t.y === player.y && t.d <= eff) return true;
+  return false;
+}
+const hostile = n => (n.type === 'guard' || n.type === 'adventurer' || n.type === 'lord') && !n.friendly;
+
+// ====================================================================
+//  NPC SETUP / POPULATION (driven by hidden justice)
+// ====================================================================
+const GUARD_ROUTES = {
+  gate:    [{ x: 18, y: 12 }, { x: 24, y: 12 }],
+  plaza:   [{ x: 16, y: 13 }, { x: 26, y: 13 }, { x: 26, y: 21 }, { x: 16, y: 21 }],
+  church:  [{ x: 7, y: 9 }, { x: 7, y: 16 }, { x: 13, y: 16 }],
+  tavern:  [{ x: 24, y: 19 }, { x: 34, y: 19 }, { x: 34, y: 28 }, { x: 24, y: 28 }],
+  south:   [{ x: 20, y: 27 }, { x: 22, y: 23 }],
+};
+const EXTRA_ROUTES = ['church', 'tavern', 'south'];
+const POIS = [
+  { x: 18, y: 17 }, { x: 24, y: 18 }, { x: 21, y: 21 }, { x: 31, y: 28 }, { x: 6, y: 9 }, { x: 34, y: 8 },
+  { x: 35, y: 15 }, { x: 7, y: 27 }, { x: 12, y: 31 }, { x: 28, y: 18 }, { x: 10, y: 17 }, { x: 25, y: 26 },
+];
+const VIL_POIS = [{ x: 8, y: 18 }, { x: 18, y: 20 }, { x: 25, y: 14 }, { x: 30, y: 18 }, { x: 13, y: 22 }, { x: 33, y: 9 }, { x: 5, y: 12 }];
+const LORD_ROUTE = [{ x: 15, y: 8 }, { x: 27, y: 8 }, { x: 27, y: 10 }, { x: 15, y: 10 }];
+
+function guardParams(n) {
+  n.range = justice < -30 ? 4 : 3;
+  n.patrolDur = justice < -20 ? 0.3 : 0.4;
+  n.chaseDur = justice < -20 ? 0.17 : 0.19;
+  n.pauseBase = justice < -20 ? 0.4 : 1.4;
+}
+function spawnGuard(routeName, extra) {
+  const r = GUARD_ROUTES[routeName];
+  const start = extra ? { x: 21, y: 12 } : r[0];
+  const n = makeEntity('guard', start.x, start.y, { route: r, routeName, wi: 0, state: 'patrol', pause: 0.5, extra, name: 'Guard' });
+  guardParams(n); n.moveDur = n.patrolDur;
+  resetPurse(n);
+  npcs.push(n); return n;
+}
+function spawnLord() {
+  const n = makeEntity('lord', 15, 8, { route: LORD_ROUTE, wi: 1, state: 'patrol', pause: 1, range: 3, patrolDur: 0.6, chaseDur: 0.6, pauseBase: 2.2, name: 'Lord Aldric' });
+  n.moveDur = n.patrolDur; resetPurse(n); npcs.push(n);
+}
+function spawnVillager(x, y) {
+  const n = makeEntity('villager', x, y, { state: 'wander', pause: rand(0, 3), range: 0, patrolDur: 0.5, pal: vilPal(), name: pick(['Old Bram', 'Hilde', 'Tomas', 'Wenna', 'Pip']), noPick: true });
+  n.moveDur = n.patrolDur; npcs.push(n);
+}
+function spawnAdventurer(x, y) {
+  const friendlyChance = justice > 25 ? Math.min(0.6, 0.15 + (justice - 25) / 100) : 0;
+  const n = makeEntity('adventurer', x, y, { state: 'wander', pause: 0.2, range: Math.random() < 0.5 ? 3 : 4, patrolDur: 0.45, chaseDur: 0.2, pauseBase: 1.6,
+    pal: advPal(), friendly: Math.random() < friendlyChance, name: pick(['Rook', 'Sela', 'Garrick', 'Ivy', 'Dunn', 'Marrow', 'Teo', 'Brienne', 'Kael', 'Oswin']), dir: 3 });
+  n.moveDur = n.patrolDur; resetPurse(n); npcs.push(n);
+}
+function resetPurse(n) {
+  const m = lootMult(); n.robbed = false; n.items = [];
+  if (n.type === 'adventurer') {
+    n.purse = Math.round(randi(8, 20) * m);
+    if (Math.random() < 0.25 + justice / 300) n.items.push(justice > 40 && Math.random() < 0.5 ? { name: 'Gemstone', value: 60 } : pick([{ name: 'Silver Ring', value: 25 }, { name: 'Guild Badge', value: 15 }, { name: 'Healing Herb', value: 6 }]));
+  } else if (n.type === 'guard') {
+    n.purse = Math.round(randi(4, 10) * Math.max(0.8, m));
+    if (Math.random() < 0.15) n.items.push({ name: 'Rusty Dagger', value: 8 });
+  } else if (n.type === 'lord') {
+    n.purse = Math.round(randi(40, 70) * Math.max(1, m));
+    if (!keyTaken && !vaultLooted) n.items.push({ name: 'Mansion Key', value: 0, key: true });
+  }
+}
+
+let popTimer = 2, spawnTimer = 0, hoardTimer = 20;
+function targetAdventurers() { const t = tier(); return [1, 2, 3, 5, 7][t]; }
+function targetExtraGuards() { return justice < -50 ? 3 : justice < -20 ? 2 : justice < 0 ? 1 : 0; }
+function populationTick() {
+  const advs = npcs.filter(n => n.type === 'adventurer' && n.state !== 'leave');
+  const over = advs.length - targetAdventurers();
+  for (let i = 0; i < over; i++) { const n = advs.find(a => a.state === 'wander' || a.state === 'patrol'); if (n) leave(n); }
+  const extras = npcs.filter(n => n.type === 'guard' && n.extra && n.state !== 'leave');
+  const want = targetExtraGuards();
+  for (let i = extras.length; i < want; i++) spawnGuard(EXTRA_ROUTES[i], true);
+  for (let i = want; i < extras.length; i++) leave(extras[i]);
+  npcs.forEach(n => { if (n.type === 'guard') guardParams(n); });
+}
+function leave(n) {
+  n.state = 'leave';
+  n.leaveTo = n.type === 'guard' ? { x: 21, y: 7 } : { x: SPAWN.x, y: MH - 1 };
+  n.path = bfs(n.x, n.y, n.leaveTo.x, n.leaveTo.y, n) || [];
+}
+
+function initNPCs() {
+  npcs.length = 0;
+  spawnGuard('gate'); spawnGuard('plaza');
+  spawnLord();
+  spawnVillager(9, 18); spawnVillager(24, 20); spawnVillager(32, 10);
+  spawnAdventurer(18, 19); spawnAdventurer(30, 28); spawnAdventurer(8, 12);
+  populationTick();
+}
+
+// ====================================================================
+//  DIALOGUE SYSTEM
+// ====================================================================
+const dlg = { queue: [], cur: null, shown: 0, choice: 0 };
+function say(name, text, opts = {}) { dlg.queue.push(Object.assign({ name, text }, opts)); if (mode !== 'dialogue' && mode !== 'fade') nextDialogue(); }
+function nextDialogue() {
+  dlg.cur = dlg.queue.shift() || null; dlg.shown = 0; dlg.choice = 0;
+  if (dlg.cur) mode = 'dialogue'; else { if (mode === 'dialogue') mode = 'play'; }
+}
+function dialogueAction() {
+  const c = dlg.cur; if (!c) return;
+  if (dlg.shown < c.text.length) { dlg.shown = c.text.length; return; }
+  sfx.select();
+  if (c.choices) { const ch = c.choices[dlg.choice]; nextDialogue(); ch.fn && ch.fn(); return; }
+  const done = c.onDone; nextDialogue(); done && done();
+}
+
+// ====================================================================
+//  WORLD INTERACTIONS
+// ====================================================================
+function addGold(n, x, y) {
+  gold = Math.max(0, gold + n);
+  floaters.push({ text: (n >= 0 ? '+' : '') + n + 'g', x: x * TS + 8, y: y * TS, t: 0, col: n >= 0 ? '#ffe060' : '#ff6060' });
+}
+function donate(amount) {
+  amount = Math.min(amount, gold);
+  if (amount <= 0) { say('Sister Marla', "Your purse is empty, child. Kindness costs nothing too."); return; }
+  gold -= amount;
+  justice = clamp(justice + amount / 4, -100, 100);
+  hoardTimer = 25; popTimer = Math.min(popTimer, 6);
+  sfx.coin();
+  const t = tier();
+  const lines = [
+    "Oh... thank you. The box has been so empty. Perhaps this town's luck will turn.",
+    "Thank you, child. What we give away has a funny way of finding its way home.",
+    "Bless you. Kindness has a way of returning to the giver... and to the town.",
+    "Again you give! The town feels it, I swear it does. Even the road seems busier.",
+    "You are a blessing on Millbrook. Strangers arrive smiling now. I wonder why...",
+  ];
+  say('Sister Marla', `(You drop ${amount}g into the offering box.) ` + lines[t]);
+}
+function churchMenu() {
+  const greet = ["The candles are cold. Few give these days... and the town grows harder for it.",
+    "Welcome. The offering box is there, if your heart allows.",
+    "Welcome, child. The offering box is there, if your heart allows.",
+    "Welcome back! The town has been kinder lately. I think the light notices.",
+    "Ah, friend of the church! Come in, come in."][tier()];
+  say('Sister Marla', greet, { choices: [
+    { label: 'Donate 10g', fn: () => donate(10) },
+    { label: 'Donate 50g', fn: () => donate(50) },
+    { label: 'Donate all', fn: () => donate(gold) },
+    { label: 'Leave', fn: () => {} },
+  ] });
+}
+function tavernMenu() {
+  say('Barkeep Odo', "Welcome to the Tipsy Goose. Drink? No? Then what d'you want?", { choices: [
+    { label: 'Sell loot', fn: () => {
+      const sell = bag.filter(i => !i.key);
+      if (!sell.length) { say('Barkeep Odo', "You've got nothing I'd buy. Come back with something shiny."); return; }
+      const v = sell.reduce((a, i) => a + i.value, 0);
+      for (let i = bag.length - 1; i >= 0; i--) if (!bag[i].key) bag.splice(i, 1);
+      addGold(v, player.x, player.y); sfx.coin();
+      say('Barkeep Odo', `${v}g for the lot. I don't ask where things come from.`);
+    } },
+    { label: 'Rumors', fn: () => say('Barkeep Odo', [
+      "Rumors? Adventurers say this town's rotten with greed. Nobody gives, nobody spends. Lord doubled the watch.",
+      "Coin's tight. Folk are hoarding, guards are twitchy, and adventurers aren't staying long.",
+      "Some say the old church brings fortune to those who feed it. Superstition, probably.",
+      "Business is booming! Rich adventurers in last night, flashing gems like candy. Careless lot.",
+      "Never seen so many heroes in town. The guild sends its richest here now. Something good's going on.",
+    ][tier()]) },
+    { label: 'Leave', fn: () => {} },
+  ] });
+}
+function mansionDoor() {
+  const k = bag.findIndex(i => i.key);
+  if (vaultLooted) { say('', "The vault is empty. You already made sure of that."); return; }
+  if (k < 0) { say('', "Locked tight. Through the keyhole you glimpse a glittering vault. The lord must carry the key."); return; }
+  bag.splice(k, 1); vaultLooted = true;
+  const v = Math.round(220 * Math.max(1, lootMult()));
+  addGold(v, player.x, player.y); sfx.coin();
+  say('', `You slip inside with the stolen key... and slip out ${v}g heavier. Nobody saw. Probably.`);
+}
+function interactDoor(b) {
+  if (b.type === 'church') churchMenu();
+  else if (b.type === 'tavern') tavernMenu();
+  else if (b.type === 'mansion') mansionDoor();
+  else say('', pick(["Nobody answers.", "You hear snoring inside.", "A dog barks behind the door. Better not."]));
+}
+function talkTo(n) {
+  n.dir = (player.dir === 0 ? 3 : player.dir === 3 ? 0 : player.dir === 1 ? 2 : 1);
+  n.pause = Math.max(n.pause, 2);
+  const t = tier();
+  if (n.type === 'villager') {
+    const L = [
+      ["Lord's hired even more guards. Says the town's crawling with greedy hands.", "Adventurers used to stop here. Now they ride past. Say the town's got a cold heart.", "Church box has been empty for weeks. Funny how the luck dried up with it."],
+      ["Guards everywhere lately. Who's got all the coin, I wonder? Not me.", "My gran always said: what you clutch, you lose. What you give comes home."],
+      ["Sister Marla says every coin in the offering box comes back twice. Never seen it myself.", "Quiet week. A few adventurers, a few guards. Same as always.", "Heard the lord keeps his vault key on his belt. Not that I'd know."],
+      ["Someone's been leaving gifts at the church! The whole town feels lighter.", "More adventurers every day. Rich ones too. Good for business!"],
+      ["The guild calls Millbrook the friendliest town on the road. Adventurers flock here!", "Even the guards seem relaxed. Half of them went home. Blessings, I suppose."],
+    ][t];
+    say(n.name, pick(L));
+  } else if (n.friendly) {
+    say(n.name, pick([
+      "Ha, rough day? Tip: the lord's always got something jingling on his belt besides coin.",
+      "This town treats us well. We get careless with our purses here... don't tell anyone.",
+      "Someone's been feeding the church box. Good folk around here. Makes me want to stay.",
+      "Guards? Barely any lately. You could nap in the plaza.",
+      "Lean in close, friend. The best marks always face away from you when they stop to think.",
+    ]));
+  }
+}
+
+// ====================================================================
+//  PICKPOCKET MINIGAME
+// ====================================================================
+const mg = { target: null, pos: 0, dir: 1, speed: 1, zone: 0, zoneW: 0, sweeps: 0, result: null, rt: 0 };
+function behindTarget() {
+  const tx = player.x + DX[player.dir], ty = player.y + DY[player.dir];
+  for (const n of npcs) {
+    if (n.noPick || n.state === 'chase' || n.state === 'alert') continue;
+    const atTile = (n.x === tx && n.y === ty) || (n.moving && n.fx === tx && n.fy === ty);
+    if (atTile && n.dir === player.dir) return n;
+  }
+  return null;
+}
+function facingNPC() {
+  const tx = player.x + DX[player.dir], ty = player.y + DY[player.dir];
+  return npcs.find(n => n.x === tx && n.y === ty);
+}
+function startPickpocket(n) {
+  if (n.robbed) { say('', `${n.name}'s purse is already empty.`); return; }
+  mode = 'minigame';
+  const diff = n.type === 'lord' ? 1.45 : n.type === 'guard' ? 1.2 : 1;
+  mg.target = n; mg.pos = 0; mg.dir = 1; mg.speed = 1.1 * diff; mg.sweeps = 0; mg.result = null; mg.rt = 0;
+  mg.zoneW = (0.22 + (player.crouch ? 0.05 : 0)) / diff;
+  mg.zone = rand(0.3, 0.9 - mg.zoneW);
+}
+function resolvePickpocket(success) {
+  const n = mg.target;
+  mg.result = success ? 'ok' : 'fail'; mg.rt = 0.55;
+  if (success) {
+    sfx.coin();
+    const perfect = Math.abs(mg.pos - (mg.zone + mg.zoneW / 2)) < mg.zoneW * 0.2;
+    addGold(n.purse, n.x, n.y);
+    const got = [`${n.purse}g`];
+    if (n.items.length) { const it = n.items.shift(); if (it.key) keyTaken = true; bag.push(it); got.push(it.name); }
+    else if (perfect && Math.random() < 0.3) { const it = { name: 'Lucky Coin', value: 12 }; bag.push(it); got.push(it.name); }
+    n.purse = 0; n.robbed = true;
+    if (n.type === 'adventurer') n.leaveSoon = true;
+    mg.msg = 'Got ' + got.join(' + ') + (perfect ? '  (clean!)' : '');
+  } else {
+    sfx.fail(); mg.msg = 'Fumbled!';
+  }
+}
+function endMinigame() {
+  const n = mg.target; mode = 'play';
+  if (mg.result === 'fail') {
+    n.dir = [3, 2, 1, 0][n.dir];
+    if (n.friendly) { say(n.name, "Hm? Oh—watch your hands there, friend. Ha! No harm done."); return; }
+    alertNPC(n, true);
+  }
+}
+
+// ====================================================================
+//  NPC AI
+// ====================================================================
+function alertNPC(n, instant) {
+  if (n.state === 'chase' || n.state === 'alert') return;
+  n.state = 'alert'; n.alertT = instant ? 0.15 : 0.4; n.icon = '!'; n.iconT = 1.2; n.path = [];
+  n.lastSeen = { x: player.x, y: player.y }; n.lostT = 0;
+  const dx = player.x - n.x, dy = player.y - n.y;
+  n.dir = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 1 : 2) : (dy < 0 ? 3 : 0);
+  sfx.alert();
+  if (n.type === 'lord') {
+    n.shout = 1.5;
+    const guards = npcs.filter(g => g.type === 'guard' && g.state !== 'chase').sort((a, b) => (Math.abs(a.x - n.x) + Math.abs(a.y - n.y)) - (Math.abs(b.x - n.x) + Math.abs(b.y - n.y)));
+    guards.slice(0, 2).forEach(gd => { gd.state = 'chase'; gd.icon = '!'; gd.iconT = 1.2; gd.lastSeen = { x: player.x, y: player.y }; gd.lostT = 0; gd.moveDur = gd.chaseDur; gd.path = []; });
+  }
+}
+function stepNPC(n, dt) {
+  n.animT += dt;
+  if (n.iconT > 0) n.iconT -= dt;
+  if (n.shout > 0) n.shout -= dt;
+  if (n.moving) {
+    n.mt += dt / n.moveDur;
+    if (n.mt >= 1) { n.moving = false; n.mt = 0; }
+    n.px = (n.fx + (n.x - n.fx) * Math.min(1, n.mt)) * TS; n.py = (n.fy + (n.y - n.fy) * Math.min(1, n.mt)) * TS;
+    if (n.moving) return;
+    n.px = n.x * TS; n.py = n.y * TS;
+  }
+  n.cone = n.range ? coneTiles(n) : [];
+
+  // detection
+  if (hostile(n) && n.state !== 'chase' && n.state !== 'alert' && n.state !== 'leave' && canSee(n)) alertNPC(n);
+  if (n.state === 'leave' && hostile(n) && canSee(n) && n.type === 'guard') alertNPC(n);
+
+  switch (n.state) {
+    case 'alert':
+      n.alertT -= dt;
+      if (n.alertT <= 0) {
+        if (n.type === 'lord') { n.state = 'patrol'; n.pause = 2; }
+        else { n.state = 'chase'; n.moveDur = n.chaseDur; n.path = []; }
+      }
+      return;
+    case 'chase': {
+      if (canSee(n)) { n.lastSeen = { x: player.x, y: player.y }; n.lostT = 0; }
+      else n.lostT += dt;
+      const dist = Math.abs(player.x - n.x) + Math.abs(player.y - n.y);
+      if (dist <= 1 && grace <= 0 && (n.lostT < 0.6 || (n.lastSeen && Math.abs(n.lastSeen.x - player.x) + Math.abs(n.lastSeen.y - player.y) <= 1))) { caught(n); return; }
+      if (n.x === n.lastSeen.x && n.y === n.lastSeen.y || n.lostT > 6) {
+        n.state = 'search'; n.searchT = 2.6; n.icon = '?'; n.iconT = 2.6; n.moveDur = n.patrolDur; return;
+      }
+      const p = bfs(n.x, n.y, n.lastSeen.x, n.lastSeen.y, n, true) || bfs(n.x, n.y, n.lastSeen.x, n.lastSeen.y, n, false);
+      if (p && p.length) tryMove(n, p[0]);
+      else { n.state = 'search'; n.searchT = 2; n.icon = '?'; n.iconT = 2; n.moveDur = n.patrolDur; }
+      return;
+    }
+    case 'search':
+      n.searchT -= dt;
+      if (Math.floor(n.searchT / 0.6) !== Math.floor((n.searchT + dt) / 0.6)) n.dir = [2, 0, 1, 3][n.dir];
+      if (canSee(n)) { n.state = 'chase'; n.moveDur = n.chaseDur; n.icon = '!'; n.iconT = 1; n.lastSeen = { x: player.x, y: player.y }; n.lostT = 0; sfx.alert(); return; }
+      if (n.searchT <= 0) { n.state = n.route ? 'patrol' : 'wander'; n.path = []; n.pause = 0.5; }
+      return;
+    case 'leave':
+      if (n.x === n.leaveTo.x && n.y === n.leaveTo.y) { n.dead = true; return; }
+      if (!n.path || !n.path.length) n.path = bfs(n.x, n.y, n.leaveTo.x, n.leaveTo.y, n) || [];
+      if (n.path.length) followPath(n, dt); else n.dead = true;
+      return;
+    default: // patrol / wander
+      if (n.pause > 0) {
+        n.pause -= dt;
+        if (n.type !== 'villager' && n.lookT === undefined) n.lookT = 0;
+        n.lookT = (n.lookT || 0) + dt;
+        if (n.lookT > (n.type === 'guard' && justice < -20 ? 0.5 : 0.9) && n.pause > 0.2) { n.lookT = 0; if (Math.random() < 0.6) n.dir = randi(0, 3); }
+        return;
+      }
+      if (!n.path || !n.path.length) {
+        let target;
+        if (n.leaveSoon && n.type === 'adventurer') { leave(n); return; }
+        if (n.route) { n.wi = (n.wi + 1) % n.route.length; target = n.route[n.wi]; }
+        else target = pick(n.type === 'villager' ? VIL_POIS : POIS);
+        n.path = bfs(n.x, n.y, target.x, target.y, n) || [];
+        if (!n.path.length) { n.pause = 0.5; return; }
+      }
+      followPath(n, dt);
+      if (!n.path.length && !n.moving) n.pause = (n.pauseBase || 1.5) * rand(0.6, 1.4);
+  }
+}
+function followPath(n, dt) {
+  const next = n.path[0];
+  if (tryMove(n, next)) { n.path.shift(); n.blockT = 0; if (!n.path.length && n.state !== 'leave') n.pause = (n.pauseBase || 1.5) * rand(0.6, 1.4); }
+  else { n.blockT = (n.blockT || 0) + dt; if (n.blockT > 1) { n.blockT = 0; n.path = []; n.pause = 0.3; } }
+}
+function tryMove(n, t) {
+  const d = t.x < n.x ? 1 : t.x > n.x ? 2 : t.y < n.y ? 3 : 0;
+  n.dir = d;
+  if (solidN(at(t.x, t.y)) || occupied(t.x, t.y, n)) return false;
+  n.fx = n.x; n.fy = n.y; n.x = t.x; n.y = t.y; n.moving = true; n.mt = 0;
+  return true;
+}
+
+// ====================================================================
+//  CAUGHT / RESPAWN
+// ====================================================================
+let fade = { t: 0, phase: 0, onMid: null };
+function caught(n) {
+  sfx.caught();
+  const loss = Math.ceil(gold * 0.4);
+  mode = 'fade'; fade = { t: 0, phase: 0, onMid: () => {
+    gold -= loss;
+    player.x = player.fx = SPAWN.x; player.y = player.fy = SPAWN.y; player.px = SPAWN.x * TS; player.py = SPAWN.y * TS; player.dir = 3; player.moving = false;
+    npcs.forEach(m => {
+      if (m.state === 'chase' || m.state === 'alert' || m.state === 'search') { m.state = m.route ? 'patrol' : 'wander'; m.path = []; m.pause = 1; m.moveDur = m.patrolDur; m.icon = null; }
+    });
+    grace = 2.5;
+    const who = n.type === 'guard' ? 'The guard' : n.name;
+    say('', `${who} grabs you by the collar. You can't fight back - you never could.`);
+    say('', loss > 0 ? `You're shaken down for ${loss}g and tossed out the town gate.` : `They find nothing worth taking, laugh, and toss you out the gate.`);
+  } };
+}
+
+// ====================================================================
+//  INPUT
+// ====================================================================
+const keys = {}, pressed = {};
+const KEYMAP = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right',
+  Space: 'act', KeyE: 'act', KeyZ: 'act', Enter: 'act', ShiftLeft: 'crouch', ShiftRight: 'crouch', KeyC: 'ctoggle', KeyH: 'help' };
+let dirStack = [];
+let crouchToggle = false;
+addEventListener('keydown', e => {
+  const k = KEYMAP[e.code]; if (!k) return;
+  e.preventDefault();
+  if (!keys[k]) { pressed[k] = true; if (['up', 'down', 'left', 'right'].includes(k)) { dirStack = dirStack.filter(d => d !== k); dirStack.push(k); } }
+  keys[k] = true;
+});
+addEventListener('keyup', e => {
+  const k = KEYMAP[e.code]; if (!k) return;
+  keys[k] = false; dirStack = dirStack.filter(d => d !== k);
+});
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; dirStack = []; });
+const DIRNAME = { down: 0, left: 1, right: 2, up: 3 };
+
+let holdT = 0, lastHeld = -1;
+function updatePlayer(dt) {
+  player.animT += dt;
+  player.crouch = keys.crouch || crouchToggle;
+  if (player.moving) {
+    player.mt += dt / player.moveDur;
+    if (player.mt >= 1) { player.moving = false; player.mt = 0; }
+    const t = player.moving ? player.mt : 1;
+    player.px = (player.fx + (player.x - player.fx) * t) * TS; player.py = (player.fy + (player.y - player.fy) * t) * TS;
+    if (player.moving) return;
+  }
+  const held = dirStack.length ? DIRNAME[dirStack[dirStack.length - 1]] : -1;
+  if (held < 0) { holdT = 0; lastHeld = -1; return; }
+  if (held !== lastHeld) { lastHeld = held; holdT = 0; }
+  holdT += dt;
+  if (player.dir !== held) { player.dir = held; holdT = 0; return; }
+  if (holdT < 0.07 && !player.wasMoving) return;
+  const nx = player.x + DX[held], ny = player.y + DY[held];
+  if (solidP(at(nx, ny)) || occupied(nx, ny, player)) { player.wasMoving = false; return; }
+  player.fx = player.x; player.fy = player.y; player.x = nx; player.y = ny;
+  player.moving = true; player.mt = 0;
+  player.moveDur = player.crouch ? 0.3 : (at(nx, ny) === T.BUSH || at(nx, ny) === T.BARREL ? 0.22 : 0.15);
+  player.wasMoving = true;
+}
+function lateWasMoving() { if (!dirStack.length) player.wasMoving = false; }
+
+function playerAction() {
+  const n = behindTarget();
+  if (n) { startPickpocket(n); return; }
+  const f = facingNPC();
+  if (f && (f.type === 'villager' || f.friendly)) { talkTo(f); return; }
+  const tx = player.x + DX[player.dir], ty = player.y + DY[player.dir];
+  if (at(tx, ty) === T.DOOR) { interactDoor(buildings[bmap[ty * MW + tx]]); return; }
+  if (at(player.x, player.y) === T.BARREL) { say('', 'Cramped, dark, and smells of pickled herring. Perfect.'); return; }
+}
+
+// ====================================================================
+//  UPDATE
+// ====================================================================
+function update(dt) {
+  time += dt;
+  if (pressed.help) { showHelp = !showHelp; }
+  if (pressed.ctoggle) crouchToggle = !crouchToggle;
+
+  if (mode === 'fade') {
+    fade.t += dt;
+    if (fade.phase === 0 && fade.t > 0.6) { fade.phase = 1; fade.onMid && fade.onMid(); }
+    if (fade.t > 1.2) { mode = 'play'; if (dlg.queue.length) nextDialogue(); }
+    return;
+  }
+  if (mode === 'dialogue') {
+    const c = dlg.cur;
+    if (c && dlg.shown < c.text.length) { const before = Math.floor(dlg.shown); dlg.shown = Math.min(c.text.length, dlg.shown + dt * 48); if (Math.floor(dlg.shown) !== before && Math.floor(dlg.shown) % 3 === 0) sfx.blip(); }
+    if (c && c.choices && dlg.shown >= c.text.length) {
+      if (pressed.up) { dlg.choice = (dlg.choice + c.choices.length - 1) % c.choices.length; sfx.blip(); }
+      if (pressed.down) { dlg.choice = (dlg.choice + 1) % c.choices.length; sfx.blip(); }
+    }
+    if (pressed.act) dialogueAction();
+    return;
+  }
+  if (mode === 'minigame') {
+    if (mg.result) { mg.rt -= dt; if (mg.rt <= 0) endMinigame(); return; }
+    mg.pos += mg.dir * mg.speed * dt;
+    if (mg.pos >= 1) { mg.pos = 1; mg.dir = -1; mg.sweeps++; }
+    if (mg.pos <= 0) { mg.pos = 0; mg.dir = 1; mg.sweeps++; }
+    if (pressed.act) resolvePickpocket(mg.pos >= mg.zone && mg.pos <= mg.zone + mg.zoneW);
+    else if (mg.sweeps >= 3) resolvePickpocket(false);
+    return;
+  }
+
+  // ---- play ----
+  if (grace > 0) grace -= dt;
+  updatePlayer(dt);
+  if (pressed.act && !player.moving) playerAction();
+  lateWasMoving();
+  for (const n of npcs) stepNPC(n, dt);
+  for (let i = npcs.length - 1; i >= 0; i--) if (npcs[i].dead) npcs.splice(i, 1);
+
+  // hidden justice: hoarding slowly sours the town
+  hoardTimer -= dt;
+  if (hoardTimer <= 0) {
+    hoardTimer = 20;
+    if (gold > 120) justice = clamp(justice - (1 + Math.floor((gold - 120) / 120)), -100, 100);
+    else if (gold < 40 && justice < 0) justice = Math.min(0, justice + 1); // the poor are forgiven
+  }
+  popTimer -= dt;
+  if (popTimer <= 0) { popTimer = 20; populationTick(); }
+  spawnTimer -= dt;
+  if (spawnTimer <= 0) {
+    spawnTimer = 3.5;
+    const count = npcs.filter(n => n.type === 'adventurer' && n.state !== 'leave').length;
+    const far = Math.abs(player.x - SPAWN.x) + Math.abs(player.y - (MH - 2)) > 4;
+    if (count < targetAdventurers() && far && !occupied(SPAWN.x, MH - 2, null)) spawnAdventurer(SPAWN.x, MH - 2);
+  }
+  for (const f of floaters) f.t += dt;
+  for (let i = floaters.length - 1; i >= 0; i--) if (floaters[i].t > 1.2) floaters.splice(i, 1);
+}
+
+// ====================================================================
+//  RENDER
+// ====================================================================
+function render() {
+  // camera
+  camX = Math.round(clamp(player.px + 8 - BW / 2, 0, MW * TS - BW));
+  camY = Math.round(clamp(player.py + 8 - BH / 2, 0, MH * TS - BH));
+  const tx0 = Math.floor(camX / TS), ty0 = Math.floor(camY / TS);
+  g.fillStyle = '#1a3a18'; g.fillRect(0, 0, BW, BH);
+  const wf = Math.floor(time * 3) % 4;
+  // ground layer
+  for (let ty = ty0 - 1; ty <= ty0 + VH + 1; ty++) for (let tx = tx0 - 1; tx <= tx0 + VW + 1; tx++) {
+    if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) continue;
+    const t = map[ty * MW + tx], sx = tx * TS - camX, sy = ty * TS - camY, h = hash(tx, ty);
+    let img;
+    if (t === T.PATH) img = pathT[h % 3];
+    else if (t === T.STONE) img = stoneTile;
+    else if (t === T.WATER) img = waterT[(wf + h) % 4];
+    else if (t === T.FLOWER) img = flowerT[h % 3];
+    else img = grassT[h % 4];
+    g.drawImage(img, sx, sy);
+    if (t === T.WATER) { // fountain rim
+      if (at(tx, ty - 1) !== T.WATER) { P(g, sx, sy, '#c8c4d0', 16, 3); P(g, sx, sy + 3, '#8a8694', 16, 1); }
+      if (at(tx, ty + 1) !== T.WATER) { P(g, sx, sy + 12, '#8a8694', 16, 4); P(g, sx, sy + 12, '#c8c4d0', 16, 1); }
+      if (at(tx - 1, ty) !== T.WATER) P(g, sx, sy, '#b0acb8', 2, 16);
+      if (at(tx + 1, ty) !== T.WATER) P(g, sx + 14, sy, '#b0acb8', 2, 16);
+    }
+  }
+  // fountain spout
+  { const sx = 21 * TS - camX + 6, sy = 14 * TS - camY + 4; P(g, sx, sy, '#c8c4d0', 4, 10); P(g, sx + 1, sy - 3 + (Math.floor(time * 6) % 2), '#a8d8ff', 2, 4); }
+
+  // vision cones
+  for (const n of npcs) {
+    if (!n.cone || !n.cone.length || n.friendly) continue;
+    const ox = n.px - n.x * TS, oy = n.py - n.y * TS;
+    const chasing = n.state === 'chase' || n.state === 'alert';
+    const searching = n.state === 'search';
+    for (const c of n.cone) {
+      const eff = n.range - (player.crouch ? 1 : 0);
+      const a = (c.d > eff ? 0.14 : 0.36) + 0.06 * Math.sin(time * 5 + c.d);
+      g.fillStyle = chasing ? `rgba(255,60,40,${a + 0.08})` : searching ? `rgba(255,160,40,${a})` : `rgba(255,240,120,${a})`;
+      const cx = Math.round(c.x * TS - camX + ox), cy = Math.round(c.y * TS - camY + oy);
+      g.fillRect(cx, cy, TS, TS);
+      g.fillStyle = chasing ? 'rgba(255,60,40,.35)' : 'rgba(255,250,200,.3)';
+      g.fillRect(cx + 1, cy + 1, TS - 2, 1); g.fillRect(cx + 1, cy + 1, 1, TS - 2);
+    }
+  }
+
+  // y-sorted objects
+  const list = [];
+  const pOnBarrel = at(player.x, player.y) === T.BARREL && !player.moving;
+  for (let ty = ty0 - 1; ty <= ty0 + VH + 3; ty++) for (let tx = tx0 - 1; tx <= tx0 + VW + 1; tx++) {
+    if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) continue;
+    const t = map[ty * MW + tx];
+    if (t === T.TREE) list.push({ k: (ty + 1) * TS, f: () => g.drawImage(treeSpr, tx * TS - camX, ty * TS - 16 - camY) });
+    else if (t === T.BUSH) list.push({ k: (ty + 1) * TS + 0.5, f: () => {
+      const sway = (player.x === tx && player.y === ty) ? Math.round(Math.sin(time * 20)) : 0;
+      g.drawImage(bushSpr, tx * TS - camX + sway, ty * TS - camY);
+    } });
+    else if (t === T.BARREL) list.push({ k: (ty + 1) * TS + 0.5, f: () => g.drawImage(pOnBarrel && player.x === tx && player.y === ty ? barrelO : barrelS, tx * TS - camX, ty * TS - camY) });
+    else if (t === T.FENCE) list.push({ k: (ty + 1) * TS - 1, f: () => g.drawImage(getFence(tx, ty), tx * TS - camX, ty * TS - 4 - camY) });
+  }
+  for (const b of buildings) {
+    if ((b.x + b.w) * TS < camX || b.x * TS > camX + BW || (b.y + b.h) * TS < camY - 8 || b.y * TS - 8 > camY + BH) continue;
+    list.push({ k: (b.y + b.h) * TS, f: () => g.drawImage(bldSpr[b.id], b.x * TS - camX, b.y * TS - 8 - camY) });
+  }
+  for (const n of npcs) list.push({ k: n.py + TS + 0.2, f: () => drawChar(g, n, n.px - camX, n.py - camY) });
+  if (!pOnBarrel) list.push({ k: player.py + TS + 0.3, f: () => {
+    if (isHidden()) g.globalAlpha = 0.55;
+    drawChar(g, player, player.px - camX, player.py - camY);
+    g.globalAlpha = 1;
+  } });
+  list.sort((a, b) => a.k - b.k);
+  for (const o of list) o.f();
+
+  // overhead icons
+  for (const n of npcs) {
+    const x = Math.round(n.px - camX), y = Math.round(n.py - camY);
+    if (n.icon && n.iconT > 0) {
+      const bounce = n.icon === '!' ? Math.round(Math.abs(Math.sin(n.iconT * 10)) * -3) : 0;
+      const bx = x + 4, by = y - 14 + bounce;
+      P(g, bx - 1, by - 1, '#1a1420', 10, 12); P(g, bx, by, n.icon === '!' ? '#ffe040' : '#e0e8ff', 8, 10);
+      if (n.icon === '!') { P(g, bx + 3, by + 1, '#c02020', 2, 5); P(g, bx + 3, by + 7, '#c02020', 2, 2); }
+      else { P(g, bx + 2, by + 1, '#3050c0', 4, 1); P(g, bx + 5, by + 2, '#3050c0', 1, 2); P(g, bx + 3, by + 4, '#3050c0', 2, 1); P(g, bx + 3, by + 5, '#3050c0', 1, 1); P(g, bx + 3, by + 7, '#3050c0', 1, 1); }
+    }
+    if (n.friendly && !n.icon && Math.floor(time * 2 + n.x) % 4 === 0) { P(g, x + 7, y - 8, '#60e080', 2, 2); P(g, x + 6, y - 9, '#60e080', 1, 1); P(g, x + 9, y - 9, '#60e080', 1, 1); }
+  }
+  // pickpocket / interact prompt
+  if (mode === 'play' && !player.moving) {
+    const t = behindTarget();
+    if (t) { const x = Math.round(t.px - camX) + 4, y = Math.round(t.py - camY) - 12 + Math.round(Math.sin(time * 6));
+      P(g, x - 1, y - 1, '#1a1420', 10, 9); P(g, x, y, '#ffe060', 8, 7); P(g, x + 2, y + 1, '#8a6a10', 4, 5); P(g, x + 3, y + 2, '#ffe060', 2, 1); }
+  }
+  // floaters
+  g.font = '8px monospace'; g.textAlign = 'center';
+  for (const f of floaters) { g.fillStyle = '#000'; g.fillText(f.text, f.x - camX + 1, f.y - camY - f.t * 18 + 1); g.fillStyle = f.col; g.fillText(f.text, f.x - camX, f.y - camY - f.t * 18); }
+
+  // gentle warm vignette for that handheld look
+  const vg = g.createRadialGradient(BW / 2, BH / 2, BH * 0.35, BW / 2, BH / 2, BH * 0.85);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(20,10,30,0.35)');
+  g.fillStyle = vg; g.fillRect(0, 0, BW, BH);
+
+  // scale up (nearest neighbour)
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(buf, 0, 0, BW * SCALE, BH * SCALE);
+  drawUI();
+}
+
+// ---------- UI (full-res, pixel font) ----------
+const FONT = '"Press Start 2P", monospace';
+function panel(x, y, w, h) {
+  ctx.fillStyle = '#0c0a18'; ctx.fillRect(x - 3, y - 3, w + 6, h + 6);
+  ctx.fillStyle = '#e8e4f8'; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = '#1e2a6a'; ctx.fillRect(x + 4, y + 4, w - 8, h - 8);
+  ctx.fillStyle = '#2a3a8a'; ctx.fillRect(x + 4, y + 4, w - 8, 3);
+}
+function text(s, x, y, size = 16, col = '#fff', align = 'left') {
+  ctx.font = `${size}px ${FONT}`; ctx.textAlign = align; ctx.textBaseline = 'top';
+  ctx.fillStyle = '#000'; ctx.fillText(s, x + 3, y + 3);
+  ctx.fillStyle = col; ctx.fillText(s, x, y);
+}
+function wrap(s, maxW, size) {
+  ctx.font = `${size}px ${FONT}`;
+  const out = [];
+  for (const para of s.split('\n')) {
+    let line = '';
+    for (const w of para.split(' ')) {
+      const t = line ? line + ' ' + w : w;
+      if (ctx.measureText(t).width > maxW && line) { out.push(line); line = w; } else line = t;
+    }
+    out.push(line);
+  }
+  return out;
+}
+function drawUI() {
+  // gold
+  panel(14, 14, 180, 46);
+  const cx = 34, cy = 26;
+  ctx.fillStyle = '#8a6a10'; ctx.fillRect(cx - 2, cy, 26, 24); ctx.fillStyle = '#ffd840'; ctx.fillRect(cx, cy + 2, 22, 20);
+  ctx.fillStyle = '#fff4a0'; ctx.fillRect(cx + 3, cy + 5, 4, 8); ctx.fillStyle = '#c89a20'; ctx.fillRect(cx + 9, cy + 6, 4, 12);
+  text(String(gold), 68, 28, 18, '#ffe060');
+  // bag
+  if (bag.length) {
+    const names = bag.map(i => i.name);
+    const lines = [];
+    for (let i = 0; i < names.length; i += 1) lines.push(names[i]);
+    const h = 18 + lines.length * 16;
+    panel(14, 70, 230, h);
+    lines.forEach((l, i) => text('- ' + l, 26, 80 + i * 16, 9, bag[i].key ? '#ffe060' : '#d8e0ff'));
+  }
+  // stance
+  const hid = isHidden();
+  const st = hid ? 'HIDDEN' : player.crouch ? 'CROUCH' : '';
+  if (st) { panel(960 - 14 - 150, 14, 150, 40); text(st, 960 - 14 - 75, 27, 12, hid ? '#80f0a0' : '#c8d0ff', 'center'); }
+  // chase warning
+  if (mode === 'play' && npcs.some(n => n.state === 'chase')) { const a = 0.6 + 0.4 * Math.sin(time * 10); text('RUN!', 480, 24, 20, `rgba(255,80,60,${a})`, 'center'); }
+
+  // contextual prompt
+  if (mode === 'play' && !player.moving) {
+    let p = '';
+    if (behindTarget()) p = 'SPACE: Pickpocket';
+    else { const f = facingNPC(); const tx = player.x + DX[player.dir], ty = player.y + DY[player.dir];
+      if (f && (f.type === 'villager' || f.friendly)) p = 'SPACE: Talk';
+      else if (at(tx, ty) === T.DOOR) p = 'SPACE: ' + buildings[bmap[ty * MW + tx]].name; }
+    if (p) { ctx.font = `12px ${FONT}`; const w = ctx.measureText(p).width + 36; panel(480 - w / 2, 610, w, 40); text(p, 480, 624, 12, '#fff', 'center'); }
+  }
+
+  if (showHelp) {
+    panel(200, 120, 560, 300);
+    const L = ['CONTROLS', '', 'Arrows / WASD .. move (tap to turn)', 'Shift (hold)/C . crouch', 'Space / E ...... act / talk / enter', 'H .............. this panel', '',
+      'Stand directly BEHIND someone,', 'facing their back, to pickpocket.', 'Crouch in a bush or climb into a', 'barrel to vanish from sight.'];
+    L.forEach((l, i) => text(l, 230, 145 + i * 24, i === 0 ? 14 : 11, i === 0 ? '#ffe060' : '#e8e8ff'));
+  }
+
+  // minigame
+  if (mode === 'minigame') {
+    const x = 230, y = 470, w = 500, h = 90;
+    panel(x, y, w, h);
+    text(`Lifting ${mg.target.name}'s purse...`, x + 20, y + 16, 11, '#e8e8ff');
+    const bx = x + 20, by = y + 44, bw = w - 40, bh = 24;
+    ctx.fillStyle = '#0c0a18'; ctx.fillRect(bx - 3, by - 3, bw + 6, bh + 6);
+    ctx.fillStyle = '#5a2030'; ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = '#40c060'; ctx.fillRect(bx + mg.zone * bw, by, mg.zoneW * bw, bh);
+    ctx.fillStyle = '#90f0a0'; ctx.fillRect(bx + (mg.zone + mg.zoneW * 0.4) * bw, by, mg.zoneW * 0.2 * bw, bh);
+    const cxp = bx + mg.pos * bw;
+    ctx.fillStyle = '#fff'; ctx.fillRect(cxp - 3, by - 8, 6, bh + 16); ctx.fillStyle = '#000'; ctx.fillRect(cxp - 1, by - 6, 2, bh + 12);
+    if (mg.result) { panel(x + 60, y - 56, w - 120, 44); text(mg.msg, x + w / 2, y - 42, 11, mg.result === 'ok' ? '#ffe060' : '#ff7060', 'center'); }
+    else text('SPACE!', x + w - 20, y + 16, 11, '#ffe060', 'right');
+  }
+
+  // dialogue
+  if (mode === 'dialogue' && dlg.cur) {
+    const c = dlg.cur, x = 24, y = 672 - 168, w = 912, h = 150;
+    panel(x, y, w, h);
+    if (c.name) { ctx.font = `12px ${FONT}`; const nw = ctx.measureText(c.name).width + 32; panel(x + 16, y - 34, nw, 34); text(c.name, x + 32, y - 22, 12, '#ffe060'); }
+    const lines = wrap(c.text.slice(0, Math.floor(dlg.shown)), w - 56, 14);
+    lines.slice(0, 5).forEach((l, i) => text(l, x + 28, y + 24 + i * 26, 14, '#fff'));
+    const done = dlg.shown >= c.text.length;
+    if (done && c.choices) {
+      ctx.font = `12px ${FONT}`;
+      const cw = Math.max(...c.choices.map(o => ctx.measureText(o.label).width)) + 70, ch = c.choices.length * 28 + 24;
+      const cxx = x + w - cw - 8, cyy = y - ch - 10;
+      panel(cxx, cyy, cw, ch);
+      c.choices.forEach((o, i) => {
+        const sel = i === dlg.choice;
+        text((sel ? '> ' : '  ') + o.label, cxx + 18, cyy + 16 + i * 28, 12, sel ? '#ffe060' : '#c8d0ff');
+      });
+    } else if (done && Math.floor(time * 3) % 2) {
+      ctx.fillStyle = '#ffe060'; ctx.beginPath(); ctx.moveTo(x + w - 40, y + h - 32); ctx.lineTo(x + w - 24, y + h - 32); ctx.lineTo(x + w - 32, y + h - 22); ctx.fill();
+    }
+  }
+  // fade
+  if (mode === 'fade') { const a = fade.t < 0.6 ? fade.t / 0.6 : Math.max(0, 1 - (fade.t - 0.6) / 0.6); ctx.fillStyle = `rgba(0,0,0,${a})`; ctx.fillRect(0, 0, 960, 672); }
+}
+
+// ====================================================================
+//  LOOP
+// ====================================================================
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  update(dt);
+  for (const k in pressed) pressed[k] = false;
+  render();
+  requestAnimationFrame(frame);
+}
+
+initNPCs();
+for (const n of npcs) n.cone = n.range ? coneTiles(n) : [];
+say('', 'You came to Millbrook to become a hero.');
+say('', 'You lost to a slime. Then to a goose. Then to the same slime, again.');
+say('', "Swords aren't your thing. But fingers... fingers you've got.");
+say('', 'Stay out of the yellow vision cones. Sneak up BEHIND people and press SPACE to lift their purse. Hold SHIFT to crouch; crouch in bushes or hop into barrels to hide. Press H for controls.');
+grace = 1;
+const start = () => requestAnimationFrame(frame);
+if (document.fonts && document.fonts.ready) Promise.race([document.fonts.ready, new Promise(r => setTimeout(r, 1500))]).then(start); else start();
+
+// test hook (read-only snapshot; deliberately omits hidden values)
+window.__game = { get player() { return { x: player.x, y: player.y, dir: player.dir }; }, get mode() { return mode; }, get gold() { return gold; }, get npcs() { return npcs.map(n => ({ type: n.type, x: n.x, y: n.y, state: n.state })); } };
+})();
+</script>
+</body>
+</html>
