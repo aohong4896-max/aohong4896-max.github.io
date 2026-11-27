@@ -737,7 +737,7 @@ function endMinigame() {
 }
 
 // ---- bump pickpocket: walk into someone and you may lift their purse ----
-const BUMP_CHANCE = 0.55, BUMP_SNEAK_BONUS = 0.15, SUSPECT_T = 3, ESCAPE_R = 3;
+const BUMP_CHANCE = 0.55, BUMP_SNEAK_BONUS = 0.15, SUSPECT_T = 3.5, ESCAPE_R = 3, QMARK_LIMIT = 3;
 function tryBump(x, y) {
   const n = npcs.find(m => (m.x === x && m.y === y) || (m.moving && m.fx === x && m.fy === y));
   if (!n || n.noPick || n.robbed || !(n.purse > 0)) return;
@@ -751,25 +751,29 @@ function tryBump(x, y) {
     if (n.type === 'adventurer') n.leaveSoon = true;
     n.suspectT = SUSPECT_T;
   } else {
-    n.bumpCD = 2.5; n.icon = '?'; n.iconT = 0.8;
-    floaters.push({ text: '撞到了', x: n.x * TS + 8, y: n.y * TS, t: 0, col: '#e0e8ff' });
-    sfx.blip();
+    n.bumpCD = 2.5;
+  }
+  // every bumped person gets a question mark for 3.5 s, success or not
+  n.icon = '?'; n.iconT = SUSPECT_T; n.bumpQT = SUSPECT_T;
+  const puzzled = npcs.filter(m => m.bumpQT > 0);
+  if (puzzled.length >= QMARK_LIMIT) {
+    puzzled.forEach(m => { m.icon = '!'; m.iconT = 1.2; });
+    const near = hostile(n) ? n : (puzzled.find(hostile) || n);
+    caught(near);
   }
 }
 function tickSuspects(dt) {
   for (const n of npcs) {
     if (n.bumpCD > 0 && n.bumpCD < 90) n.bumpCD -= dt;
+    if (n.bumpQT > 0) n.bumpQT -= dt;
     if (!(n.suspectT > 0)) continue;
     n.suspectT -= dt;
     if (n.suspectT > 0) continue;
     n.suspectT = 0;
     const d = Math.hypot(n.x - player.x, n.y - player.y);
     if (d <= ESCAPE_R) {
-      if (n.friendly) { n.icon = '?'; n.iconT = 1.5; say(n.name, '咦？我的钱袋……算了，大概是我自己掉了。'); }
-      else { floaters.push({ text: '钱不见了！', x: n.x * TS + 8, y: n.y * TS - 8, t: 0, col: '#ff7060' }); alertNPC(n, true); }
-    } else {
-      n.icon = '?'; n.iconT = 1.5;
-      floaters.push({ text: '溜了', x: player.x * TS + 8, y: player.y * TS, t: 0, col: '#80f0a0' });
+      if (n.friendly) say(n.name, '咦？我的钱袋……算了，大概是我自己掉了。');
+      else alertNPC(n, true);
     }
   }
 }
@@ -885,7 +889,7 @@ function caught(n) {
     npcs.forEach(m => {
       if (m.state === 'chase' || m.state === 'alert' || m.state === 'search') { m.state = m.route ? 'patrol' : 'wander'; m.path = []; m.pause = 1; m.moveDur = m.patrolDur; m.icon = null; }
     });
-    npcs.forEach(m => { m.suspectT = 0; });
+    npcs.forEach(m => { m.suspectT = 0; m.bumpQT = 0; });
     grace = 2.5;
     const who = n.type === 'guard' ? '守卫' : n.name;
     say('', `${who}一把揪住了你的衣领。你没法反抗——你从来都打不过。`);
@@ -1150,17 +1154,6 @@ function render() {
     }
     if (n.friendly && !n.icon && Math.floor(time * 2 + n.x) % 4 === 0) { P(g, x + 7, y - 8, '#60e080', 2, 2); P(g, x + 6, y - 9, '#60e080', 1, 1); P(g, x + 9, y - 9, '#60e080', 1, 1); }
   }
-  // bump-steal escape ring + countdown
-  for (const n of npcs) {
-    if (!(n.suspectT > 0)) continue;
-    const cx = Math.round(n.px - camX) + 8, cy = Math.round(n.py - camY) + 8, frac = n.suspectT / SUSPECT_T;
-    g.save();
-    g.strokeStyle = `rgba(255,90,70,${0.45 + 0.35 * Math.sin(time * 10)})`; g.lineWidth = 1; g.setLineDash([3, 2]);
-    g.beginPath(); g.arc(cx, cy, ESCAPE_R * TS + 8, 0, Math.PI * 2); g.stroke();
-    g.setLineDash([]); g.fillStyle = '#1a1420'; g.beginPath(); g.arc(cx, cy - 20, 5, 0, Math.PI * 2); g.fill();
-    g.fillStyle = '#ff6050'; g.beginPath(); g.moveTo(cx, cy - 20); g.arc(cx, cy - 20, 4, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac); g.closePath(); g.fill();
-    g.restore();
-  }
   // pickpocket / interact prompt
   if (mode === 'play' && !player.moving) {
     const t = behindTarget();
@@ -1230,10 +1223,6 @@ function drawUI() {
   const st = hid ? '隐藏中' : player.crouch ? '潜行中' : '';
   if (st) { panel(960 - 14 - 150, 14, 150, 40); text(st, 960 - 14 - 75, 24, 16, hid ? '#80f0a0' : '#c8d0ff', 'center'); }
   // chase warning
-  if (mode === 'play' && !npcs.some(n => n.state === 'chase')) {
-    const sus = npcs.filter(n => n.suspectT > 0);
-    if (sus.length) { const tl = Math.min(...sus.map(n => n.suspectT)); text(`快离开！${tl.toFixed(1)}`, 480, 22, 22, '#ff7060', 'center'); }
-  }
   if (mode === 'play' && npcs.some(n => n.state === 'chase')) { const a = 0.6 + 0.4 * Math.sin(time * 10); text('快跑！', 480, 22, 24, `rgba(255,80,60,${a})`, 'center'); }
 
   // contextual prompt
@@ -1249,7 +1238,7 @@ function drawUI() {
   if (showHelp) {
     panel(200, 120, 560, 300);
     const L = ['操作说明', ''].concat(TOUCH ? ['方向键：移动（轻点转向）', '潜行键：开 / 关潜行', '行动键：扒窃 / 交谈 / 进入', '右上角 ?：打开 / 关闭本面板'] : ['方向键 / WASD：移动（轻点转向）', '按住 Shift / 按 C：潜行', '空格 / E：行动 / 交谈 / 进入', 'H：打开 / 关闭本面板'], ['',
-      '撞向路人，有机会顺走钱袋；', '得手后 3 秒内跑出红圈！', '站在身后按' + K_ACT + '也能扒窃。', '在草丛潜行或钻进木桶可藏身。']);
+      '撞向路人，有机会顺走钱袋。', '别在原地逗留，也别让太多人起疑。', '站在身后按' + K_ACT + '也能扒窃。', '在草丛潜行或钻进木桶可藏身。']);
     L.forEach((l, i) => text(l, 230, 140 + i * 25, i === 0 ? 18 : 15, i === 0 ? '#ffe060' : '#e8e8ff'));
   }
 
@@ -1311,7 +1300,7 @@ for (const n of npcs) n.cone = n.range ? coneTiles(n) : [];
 say('', '你来到磨溪镇，梦想成为一名英雄。');
 say('', '结果你输给了一只史莱姆。然后输给了一只鹅。然后又输给了同一只史莱姆。');
 say('', '你不是耍剑的料。但这双手……这双手倒是挺灵巧。');
-say('', TOUCH ? '别走进黄色的视野范围。直接【撞】向路人就有机会顺走钱袋，得手后 3 秒内要跑出红圈，不然会被发现。也可以绕到身后按行动键扒窃。按潜行键开关潜行；在草丛里潜行或钻进木桶就能藏身。点右上角 ? 查看操作说明。' : '别走进黄色的视野范围。直接【撞】向路人就有机会顺走钱袋，得手后 3 秒内要跑出红圈，不然会被发现。也可以绕到身后按空格扒窃。按住 SHIFT 潜行；在草丛里潜行或钻进木桶就能藏身。按 H 查看操作说明。');
+say('', TOUCH ? '别走进黄色的视野范围。直接【撞】向路人就有机会顺走钱袋。得手了别在原地逗留，也别让太多人同时起疑。也可以绕到身后按行动键扒窃。按潜行键开关潜行；在草丛里潜行或钻进木桶就能藏身。点右上角 ? 查看操作说明。' : '别走进黄色的视野范围。直接【撞】向路人就有机会顺走钱袋。得手了别在原地逗留，也别让太多人同时起疑。也可以绕到身后按空格扒窃。按住 SHIFT 潜行；在草丛里潜行或钻进木桶就能藏身。按 H 查看操作说明。');
 grace = 1;
 const start = () => requestAnimationFrame(frame);
 if (document.fonts && document.fonts.ready) Promise.race([document.fonts.ready, new Promise(r => setTimeout(r, 1500))]).then(start); else start();
