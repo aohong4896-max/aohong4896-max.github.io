@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>妙手神偷</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Noto+Sans+SC:wght@700&display=swap" rel="stylesheet">
@@ -13,18 +13,55 @@
   #game { image-rendering: pixelated; image-rendering: crisp-edges; display: block;
           max-width: 100vw; max-height: calc(100vh - 40px); aspect-ratio: 960 / 672;
           border: 3px solid #3a3450; box-shadow: 0 0 0 3px #0a0910, 0 12px 40px #000; }
+  body.touch { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overflow: hidden; }
+  body.touch #help { display: none; }
+  body.touch #game { max-height: 100dvh; max-height: 100vh; }
+  @media (orientation: portrait) { body.touch { justify-content: flex-start; padding-top: 12px; box-sizing: border-box; } }
+  #touch { display: none; }
+  body.touch #touch { display: block; }
+  .tc { position: fixed; z-index: 10; touch-action: none; -webkit-tap-highlight-color: transparent;
+        font-family: "Noto Sans SC", sans-serif; color: #fff; text-align: center; user-select: none; }
+  #dpad { left: calc(10px + env(safe-area-inset-left)); bottom: calc(16px + env(safe-area-inset-bottom));
+          width: 120px; height: 120px; border-radius: 50%; background: rgba(30,26,50,.55); border: 3px solid rgba(255,255,255,.25); }
+  #dpad span { position: absolute; width: 0; height: 0; border: 14px solid transparent; opacity: .75; }
+  #dpad .u { left: calc(50% - 14px); top: 7px; border-bottom: 18px solid #fff; border-top: 0; }
+  #dpad .d { left: calc(50% - 14px); bottom: 7px; border-top: 18px solid #fff; border-bottom: 0; }
+  #dpad .l { top: calc(50% - 14px); left: 7px; border-right: 18px solid #fff; border-left: 0; }
+  #dpad .r { top: calc(50% - 14px); right: 7px; border-left: 18px solid #fff; border-right: 0; }
+  #dpad span.on { opacity: 1; filter: drop-shadow(0 0 4px #ffe060); }
+  .tb { border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 17px;
+        border: 3px solid rgba(255,255,255,.35); box-shadow: 0 4px 0 rgba(0,0,0,.4); }
+  .tb.down { transform: translateY(3px); box-shadow: 0 1px 0 rgba(0,0,0,.4); }
+  #bAct { right: calc(14px + env(safe-area-inset-right)); bottom: calc(16px + env(safe-area-inset-bottom)); width: 84px; height: 84px; background: rgba(200,60,70,.8); }
+  #bSneak { right: calc(24px + env(safe-area-inset-right)); bottom: calc(116px + env(safe-area-inset-bottom)); width: 64px; height: 64px; background: rgba(70,60,140,.8); font-size: 15px; }
+  #bSneak.on { background: rgba(150,90,230,.95); border-color: #ffe060; }
+  #bHelp { right: calc(14px + env(safe-area-inset-right)); top: calc(14px + env(safe-area-inset-top)); width: 40px; height: 40px; background: rgba(30,26,50,.7); font-size: 18px; }
+  @media (orientation: portrait) {
+    #bSneak { right: calc(112px + env(safe-area-inset-right)); bottom: calc(18px + env(safe-area-inset-bottom)); }
+    #bAct { bottom: calc(40px + env(safe-area-inset-bottom)); }
+    #bHelp { top: auto; bottom: calc(190px + env(safe-area-inset-bottom)); }
+  }
   #help { font-size: 13px; line-height: 1.8; opacity: .7; margin-top: 10px; text-align: center; padding: 0 16px; }
 </style>
 </head>
 <body>
 <canvas id="game" width="960" height="672"></canvas>
 <div id="help">方向键/WASD 移动 &middot; 按住SHIFT / 按C 潜行 &middot; 空格 / E 行动 &middot; H 操作说明</div>
+<div id="touch">
+  <div id="dpad" class="tc"><span class="u"></span><span class="d"></span><span class="l"></span><span class="r"></span></div>
+  <div id="bAct" class="tc tb">行动</div>
+  <div id="bSneak" class="tc tb">潜行</div>
+  <div id="bHelp" class="tc tb">?</div>
+</div>
 <script>
 (() => {
 'use strict';
 // ====================================================================
 //  CONSTANTS
 // ====================================================================
+const TOUCH = (window.matchMedia && matchMedia('(pointer: coarse)').matches) || ('ontouchstart' in window && navigator.maxTouchPoints > 0);
+if (TOUCH) document.body.classList.add('touch');
+const K_ACT = TOUCH ? '行动' : '空格';
 const TS = 16, SCALE = 3;
 const VW = 20, VH = 14;                // view size in tiles
 const BW = VW * TS, BH = VH * TS;      // low-res buffer
@@ -838,6 +875,49 @@ addEventListener('keyup', e => {
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; dirStack = []; });
 const DIRNAME = { down: 0, left: 1, right: 2, up: 3 };
 
+// ---- touch controls (phones / tablets) ----
+function tPress(k) {
+  if (!keys[k]) { pressed[k] = true; if (k in DIRNAME) { dirStack = dirStack.filter(d => d !== k); dirStack.push(k); } }
+  keys[k] = true;
+}
+function tRelease(k) { keys[k] = false; dirStack = dirStack.filter(d => d !== k); }
+function unlockAudio() {
+  try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === 'suspended') actx.resume(); } catch (e) {}
+}
+if (TOUCH) {
+  const pad = document.getElementById('dpad');
+  const arrows = { up: pad.querySelector('.u'), down: pad.querySelector('.d'), left: pad.querySelector('.l'), right: pad.querySelector('.r') };
+  let padDir = null, padId = null;
+  const setPad = d => {
+    if (d === padDir) return;
+    if (padDir) { tRelease(padDir); arrows[padDir].classList.remove('on'); }
+    padDir = d;
+    if (d) { tPress(d); arrows[d].classList.add('on'); }
+  };
+  const padMove = e => {
+    const r = pad.getBoundingClientRect();
+    const dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+    if (Math.hypot(dx, dy) < 14) { setPad(null); return; }
+    setPad(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+  };
+  pad.addEventListener('pointerdown', e => { e.preventDefault(); unlockAudio(); padId = e.pointerId; try { pad.setPointerCapture(e.pointerId); } catch (_) {} padMove(e); });
+  pad.addEventListener('pointermove', e => { if (e.pointerId === padId) padMove(e); });
+  const padEnd = e => { if (e.pointerId === padId) { padId = null; setPad(null); } };
+  pad.addEventListener('pointerup', padEnd); pad.addEventListener('pointercancel', padEnd); pad.addEventListener('lostpointercapture', padEnd);
+
+  const btn = (id, k) => {
+    const el = document.getElementById(id);
+    el.addEventListener('pointerdown', e => { e.preventDefault(); unlockAudio(); try { el.setPointerCapture(e.pointerId); } catch (_) {} el.classList.add('down'); tPress(k); });
+    const up = () => { el.classList.remove('down'); tRelease(k); };
+    el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+  };
+  btn('bAct', 'act'); btn('bSneak', 'ctoggle'); btn('bHelp', 'help');
+  const sneakEl = document.getElementById('bSneak');
+  setInterval(() => sneakEl.classList.toggle('on', crouchToggle), 100);
+  document.addEventListener('contextmenu', e => e.preventDefault());
+  document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+}
+
 let holdT = 0, lastHeld = -1;
 function updatePlayer(dt) {
   player.animT += dt;
@@ -1097,17 +1177,17 @@ function drawUI() {
   // contextual prompt
   if (mode === 'play' && !player.moving) {
     let p = '';
-    if (behindTarget()) p = '空格：扒窃';
+    if (behindTarget()) p = K_ACT + '：扒窃';
     else { const f = facingNPC(); const tx = player.x + DX[player.dir], ty = player.y + DY[player.dir];
-      if (f && (f.type === 'villager' || f.friendly)) p = '空格：交谈';
-      else if (at(tx, ty) === T.DOOR) p = '空格：' + buildings[bmap[ty * MW + tx]].name; }
+      if (f && (f.type === 'villager' || f.friendly)) p = K_ACT + '：交谈';
+      else if (at(tx, ty) === T.DOOR) p = K_ACT + '：' + buildings[bmap[ty * MW + tx]].name; }
     if (p) { ctx.font = `16px ${FONT}`; const w = ctx.measureText(p).width + 36; panel(480 - w / 2, 606, w, 44); text(p, 480, 619, 16, '#fff', 'center'); }
   }
 
   if (showHelp) {
     panel(200, 120, 560, 300);
-    const L = ['操作说明', '', '方向键 / WASD：移动（轻点转向）', '按住 Shift / 按 C：潜行', '空格 / E：行动 / 交谈 / 进入', 'H：打开 / 关闭本面板', '',
-      '站在目标正后方、面朝其背后，', '即可扒窃。', '在草丛中潜行，或钻进木桶，', '就能从视线中消失。'];
+    const L = ['操作说明', ''].concat(TOUCH ? ['方向键：移动（轻点转向）', '潜行键：开 / 关潜行', '行动键：扒窃 / 交谈 / 进入', '右上角 ?：打开 / 关闭本面板'] : ['方向键 / WASD：移动（轻点转向）', '按住 Shift / 按 C：潜行', '空格 / E：行动 / 交谈 / 进入', 'H：打开 / 关闭本面板'], ['',
+      '站在目标正后方、面朝其背后，', '即可扒窃。', '在草丛中潜行，或钻进木桶，', '就能从视线中消失。']);
     L.forEach((l, i) => text(l, 230, 140 + i * 25, i === 0 ? 18 : 15, i === 0 ? '#ffe060' : '#e8e8ff'));
   }
 
@@ -1124,7 +1204,7 @@ function drawUI() {
     const cxp = bx + mg.pos * bw;
     ctx.fillStyle = '#fff'; ctx.fillRect(cxp - 3, by - 8, 6, bh + 16); ctx.fillStyle = '#000'; ctx.fillRect(cxp - 1, by - 6, 2, bh + 12);
     if (mg.result) { panel(x + 60, y - 56, w - 120, 44); text(mg.msg, x + w / 2, y - 44, 15, mg.result === 'ok' ? '#ffe060' : '#ff7060', 'center'); }
-    else text('按空格！', x + w - 20, y + 12, 15, '#ffe060', 'right');
+    else text('按' + K_ACT + '！', x + w - 20, y + 12, 15, '#ffe060', 'right');
   }
 
   // dialogue
@@ -1169,7 +1249,7 @@ for (const n of npcs) n.cone = n.range ? coneTiles(n) : [];
 say('', '你来到磨溪镇，梦想成为一名英雄。');
 say('', '结果你输给了一只史莱姆。然后输给了一只鹅。然后又输给了同一只史莱姆。');
 say('', '你不是耍剑的料。但这双手……这双手倒是挺灵巧。');
-say('', '别走进黄色的视野范围。悄悄绕到别人【身后】，按空格偷走钱袋。按住 SHIFT 潜行；在草丛里潜行或钻进木桶就能藏身。按 H 查看操作说明。');
+say('', TOUCH ? '别走进黄色的视野范围。悄悄绕到别人【身后】，按行动键偷走钱袋。按潜行键开关潜行；在草丛里潜行或钻进木桶就能藏身。点右上角 ? 查看操作说明。' : '别走进黄色的视野范围。悄悄绕到别人【身后】，按空格偷走钱袋。按住 SHIFT 潜行；在草丛里潜行或钻进木桶就能藏身。按 H 查看操作说明。');
 grace = 1;
 const start = () => requestAnimationFrame(frame);
 if (document.fonts && document.fonts.ready) Promise.race([document.fonts.ready, new Promise(r => setTimeout(r, 1500))]).then(start); else start();
