@@ -1,24 +1,24 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Light Fingers</title>
+<title>妙手神偷</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Noto+Sans+SC:wght@700&display=swap" rel="stylesheet">
 <style>
   html, body { margin: 0; height: 100%; background: #14121c; color: #cfc8e0; }
   body { display: flex; flex-direction: column; align-items: center; justify-content: center;
-         font-family: "Press Start 2P", monospace; }
+         font-family: "Noto Sans SC", sans-serif; }
   #game { image-rendering: pixelated; image-rendering: crisp-edges; display: block;
           max-width: 100vw; max-height: calc(100vh - 40px); aspect-ratio: 960 / 672;
           border: 3px solid #3a3450; box-shadow: 0 0 0 3px #0a0910, 0 12px 40px #000; }
-  #help { font-size: 9px; line-height: 1.8; opacity: .7; margin-top: 10px; text-align: center; padding: 0 16px; }
+  #help { font-size: 13px; line-height: 1.8; opacity: .7; margin-top: 10px; text-align: center; padding: 0 16px; }
 </style>
 </head>
 <body>
 <canvas id="game" width="960" height="672"></canvas>
-<div id="help">ARROWS/WASD move &middot; SHIFT (hold) / C (toggle) crouch &middot; SPACE / E act &middot; H controls</div>
+<div id="help">方向键/WASD 移动 &middot; 按住SHIFT / 按C 潜行 &middot; 空格 / E 行动 &middot; H 操作说明</div>
 <script>
 (() => {
 'use strict';
@@ -125,12 +125,12 @@ function buildMap() {
   rect(12, 11, 30, 11, T.FENCE); rect(20, 11, 22, 11, T.STONE);
   [[13, 7], [29, 7], [17, 7], [25, 7], [13, 10], [29, 10], [18, 9], [24, 9]].forEach(([x, y]) => set(x, y, T.BUSH));
   // buildings
-  addBuilding(15, 2, 13, 5, 21, 'mansion', "Lord's Mansion");
-  addBuilding(3, 2, 7, 6, 6, 'church', 'Church');
-  addBuilding(32, 2, 6, 5, 34, 'house', 'House');
-  addBuilding(28, 21, 8, 6, 31, 'tavern', 'The Tipsy Goose');
-  addBuilding(4, 21, 6, 5, 6, 'house', 'House');
-  addBuilding(10, 26, 6, 5, 12, 'house', 'House');
+  addBuilding(15, 2, 13, 5, 21, 'mansion', '领主府邸');
+  addBuilding(3, 2, 7, 6, 6, 'church', '教堂');
+  addBuilding(32, 2, 6, 5, 34, 'house', '民居');
+  addBuilding(28, 21, 8, 6, 31, 'tavern', '醉鹅酒馆');
+  addBuilding(4, 21, 6, 5, 6, 'house', '民居');
+  addBuilding(10, 26, 6, 5, 12, 'house', '民居');
   set(12, 31, T.PATH);
   // flowers & scatter
   for (let i = 0; i < 70; i++) {
@@ -474,36 +474,36 @@ function guardParams(n) {
 function spawnGuard(routeName, extra) {
   const r = GUARD_ROUTES[routeName];
   const start = extra ? { x: 21, y: 12 } : r[0];
-  const n = makeEntity('guard', start.x, start.y, { route: r, routeName, wi: 0, state: 'patrol', pause: 0.5, extra, name: 'Guard' });
+  const n = makeEntity('guard', start.x, start.y, { route: r, routeName, wi: 0, state: 'patrol', pause: 0.5, extra, name: '守卫' });
   guardParams(n); n.moveDur = n.patrolDur;
   resetPurse(n);
   npcs.push(n); return n;
 }
 function spawnLord() {
-  const n = makeEntity('lord', 15, 8, { route: LORD_ROUTE, wi: 1, state: 'patrol', pause: 1, range: 3, patrolDur: 0.6, chaseDur: 0.6, pauseBase: 2.2, name: 'Lord Aldric' });
+  const n = makeEntity('lord', 15, 8, { route: LORD_ROUTE, wi: 1, state: 'patrol', pause: 1, range: 3, patrolDur: 0.6, chaseDur: 0.6, pauseBase: 2.2, name: '奥德里克领主' });
   n.moveDur = n.patrolDur; resetPurse(n); npcs.push(n);
 }
 function spawnVillager(x, y) {
-  const n = makeEntity('villager', x, y, { state: 'wander', pause: rand(0, 3), range: 0, patrolDur: 0.5, pal: vilPal(), name: pick(['Old Bram', 'Hilde', 'Tomas', 'Wenna', 'Pip']), noPick: true });
+  const n = makeEntity('villager', x, y, { state: 'wander', pause: rand(0, 3), range: 0, patrolDur: 0.5, pal: vilPal(), name: pick(['老布拉姆', '希尔德', '托马斯', '温娜', '皮普']), noPick: true });
   n.moveDur = n.patrolDur; npcs.push(n);
 }
 function spawnAdventurer(x, y) {
   const friendlyChance = justice > 25 ? Math.min(0.6, 0.15 + (justice - 25) / 100) : 0;
   const n = makeEntity('adventurer', x, y, { state: 'wander', pause: 0.2, range: Math.random() < 0.5 ? 3 : 4, patrolDur: 0.45, chaseDur: 0.2, pauseBase: 1.6,
-    pal: advPal(), friendly: Math.random() < friendlyChance, name: pick(['Rook', 'Sela', 'Garrick', 'Ivy', 'Dunn', 'Marrow', 'Teo', 'Brienne', 'Kael', 'Oswin']), dir: 3 });
+    pal: advPal(), friendly: Math.random() < friendlyChance, name: pick(['鲁克', '塞拉', '加里克', '艾薇', '邓恩', '马罗', '提欧', '布里安', '凯尔', '奥斯温']), dir: 3 });
   n.moveDur = n.patrolDur; resetPurse(n); npcs.push(n);
 }
 function resetPurse(n) {
   const m = lootMult(); n.robbed = false; n.items = [];
   if (n.type === 'adventurer') {
     n.purse = Math.round(randi(8, 20) * m);
-    if (Math.random() < 0.25 + justice / 300) n.items.push(justice > 40 && Math.random() < 0.5 ? { name: 'Gemstone', value: 60 } : pick([{ name: 'Silver Ring', value: 25 }, { name: 'Guild Badge', value: 15 }, { name: 'Healing Herb', value: 6 }]));
+    if (Math.random() < 0.25 + justice / 300) n.items.push(justice > 40 && Math.random() < 0.5 ? { name: '宝石', value: 60 } : pick([{ name: '银戒指', value: 25 }, { name: '公会徽章', value: 15 }, { name: '疗伤草药', value: 6 }]));
   } else if (n.type === 'guard') {
     n.purse = Math.round(randi(4, 10) * Math.max(0.8, m));
-    if (Math.random() < 0.15) n.items.push({ name: 'Rusty Dagger', value: 8 });
+    if (Math.random() < 0.15) n.items.push({ name: '生锈匕首', value: 8 });
   } else if (n.type === 'lord') {
     n.purse = Math.round(randi(40, 70) * Math.max(1, m));
-    if (!keyTaken && !vaultLooted) n.items.push({ name: 'Mansion Key', value: 0, key: true });
+    if (!keyTaken && !vaultLooted) n.items.push({ name: '府邸钥匙', value: 0, key: true });
   }
 }
 
@@ -557,72 +557,72 @@ function dialogueAction() {
 // ====================================================================
 function addGold(n, x, y) {
   gold = Math.max(0, gold + n);
-  floaters.push({ text: (n >= 0 ? '+' : '') + n + 'g', x: x * TS + 8, y: y * TS, t: 0, col: n >= 0 ? '#ffe060' : '#ff6060' });
+  floaters.push({ text: (n >= 0 ? '+' : '') + n, x: x * TS + 8, y: y * TS, t: 0, col: n >= 0 ? '#ffe060' : '#ff6060' });
 }
 function donate(amount) {
   amount = Math.min(amount, gold);
-  if (amount <= 0) { say('Sister Marla', "Your purse is empty, child. Kindness costs nothing too."); return; }
+  if (amount <= 0) { say('玛拉修女', '孩子，你的钱袋是空的。不过，善意本身不花一分钱。'); return; }
   gold -= amount;
   justice = clamp(justice + amount / 4, -100, 100);
   hoardTimer = 25; popTimer = Math.min(popTimer, 6);
   sfx.coin();
   const t = tier();
   const lines = [
-    "Oh... thank you. The box has been so empty. Perhaps this town's luck will turn.",
-    "Thank you, child. What we give away has a funny way of finding its way home.",
-    "Bless you. Kindness has a way of returning to the giver... and to the town.",
-    "Again you give! The town feels it, I swear it does. Even the road seems busier.",
-    "You are a blessing on Millbrook. Strangers arrive smiling now. I wonder why...",
+    "哦……谢谢你。奉献箱空了好久了。也许小镇的运气会好转吧。",
+    "谢谢你，孩子。送出去的东西，总会以奇妙的方式回到身边。",
+    "愿你蒙福。善意总会回到施予者身上……也会回到这座小镇。",
+    "你又来奉献了！小镇感觉得到，我发誓。连路上的行人都多了。",
+    "你是磨溪镇的福星。如今外来的人都笑着进镇。真奇怪……",
   ];
-  say('Sister Marla', `(You drop ${amount}g into the offering box.) ` + lines[t]);
+  say('玛拉修女', `（你往奉献箱里投了${amount}金。）` + lines[t]);
 }
 function churchMenu() {
-  const greet = ["The candles are cold. Few give these days... and the town grows harder for it.",
-    "Welcome. The offering box is there, if your heart allows.",
-    "Welcome, child. The offering box is there, if your heart allows.",
-    "Welcome back! The town has been kinder lately. I think the light notices.",
-    "Ah, friend of the church! Come in, come in."][tier()];
-  say('Sister Marla', greet, { choices: [
-    { label: 'Donate 10g', fn: () => donate(10) },
-    { label: 'Donate 50g', fn: () => donate(50) },
-    { label: 'Donate all', fn: () => donate(gold) },
-    { label: 'Leave', fn: () => {} },
+  const greet = ["蜡烛都凉了。如今很少有人奉献……小镇也因此越来越冷漠。",
+    "欢迎。奉献箱就在那儿，随你心意。",
+    "欢迎你，孩子。奉献箱就在那儿，随你心意。",
+    "欢迎回来！最近小镇和善多了。我想，光明都看在眼里。",
+    "啊，教会的朋友！快请进，快请进。"][tier()];
+  say('玛拉修女', greet, { choices: [
+    { label: '捐献 10 金', fn: () => donate(10) },
+    { label: '捐献 50 金', fn: () => donate(50) },
+    { label: '全部捐献', fn: () => donate(gold) },
+    { label: '离开', fn: () => {} },
   ] });
 }
 function tavernMenu() {
-  say('Barkeep Odo', "Welcome to the Tipsy Goose. Drink? No? Then what d'you want?", { choices: [
-    { label: 'Sell loot', fn: () => {
+  say('酒保奥多', '欢迎光临醉鹅酒馆。喝一杯？不喝？那你想干嘛？', { choices: [
+    { label: '出售赃物', fn: () => {
       const sell = bag.filter(i => !i.key);
-      if (!sell.length) { say('Barkeep Odo', "You've got nothing I'd buy. Come back with something shiny."); return; }
+      if (!sell.length) { say('酒保奥多', '你身上没什么我想收的。带点亮闪闪的东西再来吧。'); return; }
       const v = sell.reduce((a, i) => a + i.value, 0);
       for (let i = bag.length - 1; i >= 0; i--) if (!bag[i].key) bag.splice(i, 1);
       addGold(v, player.x, player.y); sfx.coin();
-      say('Barkeep Odo', `${v}g for the lot. I don't ask where things come from.`);
+      say('酒保奥多', `这些全收了，给你${v}金。东西从哪来的，我不过问。`);
     } },
-    { label: 'Rumors', fn: () => say('Barkeep Odo', [
-      "Rumors? Adventurers say this town's rotten with greed. Nobody gives, nobody spends. Lord doubled the watch.",
-      "Coin's tight. Folk are hoarding, guards are twitchy, and adventurers aren't staying long.",
-      "Some say the old church brings fortune to those who feed it. Superstition, probably.",
-      "Business is booming! Rich adventurers in last night, flashing gems like candy. Careless lot.",
-      "Never seen so many heroes in town. The guild sends its richest here now. Something good's going on.",
+    { label: '打听传闻', fn: () => say('酒保奥多', [
+      "传闻？冒险者都说这镇子贪婪透顶。没人奉献，没人花钱。领主把守卫加了一倍。",
+      "手头都紧。大家都在囤钱，守卫神经兮兮，冒险者也待不长。",
+      "有人说，给老教堂奉献的人会交好运。多半是迷信吧。",
+      "生意兴隆！昨晚来了一伙有钱的冒险者，宝石跟糖果似的往外掏。粗心的家伙们。",
+      "镇上从没来过这么多英雄。公会现在把最有钱的都派来了。肯定有什么好事。",
     ][tier()]) },
-    { label: 'Leave', fn: () => {} },
+    { label: '离开', fn: () => {} },
   ] });
 }
 function mansionDoor() {
   const k = bag.findIndex(i => i.key);
-  if (vaultLooted) { say('', "The vault is empty. You already made sure of that."); return; }
-  if (k < 0) { say('', "Locked tight. Through the keyhole you glimpse a glittering vault. The lord must carry the key."); return; }
+  if (vaultLooted) { say('', "金库已经空了。你早就确认过了。"); return; }
+  if (k < 0) { say('', "门锁得死死的。透过钥匙孔，你瞥见一座闪闪发光的金库。钥匙一定在领主身上。"); return; }
   bag.splice(k, 1); vaultLooted = true;
   const v = Math.round(220 * Math.max(1, lootMult()));
   addGold(v, player.x, player.y); sfx.coin();
-  say('', `You slip inside with the stolen key... and slip out ${v}g heavier. Nobody saw. Probably.`);
+  say('', `你用偷来的钥匙溜了进去……出来时口袋里多了${v}金。没人看见。大概吧。`);
 }
 function interactDoor(b) {
   if (b.type === 'church') churchMenu();
   else if (b.type === 'tavern') tavernMenu();
   else if (b.type === 'mansion') mansionDoor();
-  else say('', pick(["Nobody answers.", "You hear snoring inside.", "A dog barks behind the door. Better not."]));
+  else say('', pick(["没人应门。", "屋里传来打呼噜的声音。", "门后有狗在叫。还是算了吧。"]));
 }
 function talkTo(n) {
   n.dir = (player.dir === 0 ? 3 : player.dir === 3 ? 0 : player.dir === 1 ? 2 : 1);
@@ -630,20 +630,20 @@ function talkTo(n) {
   const t = tier();
   if (n.type === 'villager') {
     const L = [
-      ["Lord's hired even more guards. Says the town's crawling with greedy hands.", "Adventurers used to stop here. Now they ride past. Say the town's got a cold heart.", "Church box has been empty for weeks. Funny how the luck dried up with it."],
-      ["Guards everywhere lately. Who's got all the coin, I wonder? Not me.", "My gran always said: what you clutch, you lose. What you give comes home."],
-      ["Sister Marla says every coin in the offering box comes back twice. Never seen it myself.", "Quiet week. A few adventurers, a few guards. Same as always.", "Heard the lord keeps his vault key on his belt. Not that I'd know."],
-      ["Someone's been leaving gifts at the church! The whole town feels lighter.", "More adventurers every day. Rich ones too. Good for business!"],
-      ["The guild calls Millbrook the friendliest town on the road. Adventurers flock here!", "Even the guards seem relaxed. Half of them went home. Blessings, I suppose."],
+      ["领主又雇了更多守卫。说镇上到处都是贪心的手。", "以前冒险者都会在这儿歇脚。现在他们直接路过。说这镇子心肠太冷。", "教堂的奉献箱空了好几周了。说来也怪，镇上的运气也跟着没了。"],
+      ["最近到处都是守卫。钱都跑谁口袋里去了？反正不是我。", "我奶奶常说：攥得越紧，丢得越快；送出去的，终会回来。"],
+      ["玛拉修女说，投进奉献箱的每枚硬币都会加倍回来。我自己倒是没见过。", "这周挺平静。几个冒险者，几个守卫。老样子。", "听说领主把金库钥匙挂在腰带上。我也只是听说。"],
+      ["有人一直在给教堂捐钱！整个小镇都轻松了不少。", "冒险者一天比一天多，还都是有钱人。生意好做啦！"],
+      ["公会说磨溪镇是这一路上最友善的小镇。冒险者们蜂拥而来！", "连守卫都放松了，一半都回家了。大概是福报吧。"],
     ][t];
     say(n.name, pick(L));
   } else if (n.friendly) {
     say(n.name, pick([
-      "Ha, rough day? Tip: the lord's always got something jingling on his belt besides coin.",
-      "This town treats us well. We get careless with our purses here... don't tell anyone.",
-      "Someone's been feeding the church box. Good folk around here. Makes me want to stay.",
-      "Guards? Barely any lately. You could nap in the plaza.",
-      "Lean in close, friend. The best marks always face away from you when they stop to think.",
+      "哈，今天不顺？提醒你一句：领主腰带上叮当响的，可不只是钱。",
+      "这镇子对我们很好。在这儿我们对钱袋都不太上心……别告诉别人。",
+      "有人一直在往教堂奉献箱里投钱。这里的人真好，让我都想留下了。",
+      "守卫？最近几乎没有。你都能在广场上睡个午觉。",
+      "凑近点，朋友。最好的下手对象，停下来想事情时总是背对着你。",
     ]));
   }
 }
@@ -666,7 +666,7 @@ function facingNPC() {
   return npcs.find(n => n.x === tx && n.y === ty);
 }
 function startPickpocket(n) {
-  if (n.robbed) { say('', `${n.name}'s purse is already empty.`); return; }
+  if (n.robbed) { say('', `${n.name}的钱袋已经空了。`); return; }
   mode = 'minigame';
   const diff = n.type === 'lord' ? 1.45 : n.type === 'guard' ? 1.2 : 1;
   mg.target = n; mg.pos = 0; mg.dir = 1; mg.speed = 1.1 * diff; mg.sweeps = 0; mg.result = null; mg.rt = 0;
@@ -680,21 +680,21 @@ function resolvePickpocket(success) {
     sfx.coin();
     const perfect = Math.abs(mg.pos - (mg.zone + mg.zoneW / 2)) < mg.zoneW * 0.2;
     addGold(n.purse, n.x, n.y);
-    const got = [`${n.purse}g`];
+    const got = [`${n.purse}金`];
     if (n.items.length) { const it = n.items.shift(); if (it.key) keyTaken = true; bag.push(it); got.push(it.name); }
-    else if (perfect && Math.random() < 0.3) { const it = { name: 'Lucky Coin', value: 12 }; bag.push(it); got.push(it.name); }
+    else if (perfect && Math.random() < 0.3) { const it = { name: '幸运硬币', value: 12 }; bag.push(it); got.push(it.name); }
     n.purse = 0; n.robbed = true;
     if (n.type === 'adventurer') n.leaveSoon = true;
-    mg.msg = 'Got ' + got.join(' + ') + (perfect ? '  (clean!)' : '');
+    mg.msg = '得手：' + got.join(' + ') + (perfect ? '（干净利落！）' : '');
   } else {
-    sfx.fail(); mg.msg = 'Fumbled!';
+    sfx.fail(); mg.msg = '失手了！';
   }
 }
 function endMinigame() {
   const n = mg.target; mode = 'play';
   if (mg.result === 'fail') {
     n.dir = [3, 2, 1, 0][n.dir];
-    if (n.friendly) { say(n.name, "Hm? Oh—watch your hands there, friend. Ha! No harm done."); return; }
+    if (n.friendly) { say(n.name, "嗯？哦——手放规矩点，朋友。哈！没事没事。"); return; }
     alertNPC(n, true);
   }
 }
@@ -811,9 +811,9 @@ function caught(n) {
       if (m.state === 'chase' || m.state === 'alert' || m.state === 'search') { m.state = m.route ? 'patrol' : 'wander'; m.path = []; m.pause = 1; m.moveDur = m.patrolDur; m.icon = null; }
     });
     grace = 2.5;
-    const who = n.type === 'guard' ? 'The guard' : n.name;
-    say('', `${who} grabs you by the collar. You can't fight back - you never could.`);
-    say('', loss > 0 ? `You're shaken down for ${loss}g and tossed out the town gate.` : `They find nothing worth taking, laugh, and toss you out the gate.`);
+    const who = n.type === 'guard' ? '守卫' : n.name;
+    say('', `${who}一把揪住了你的衣领。你没法反抗——你从来都打不过。`);
+    say('', loss > 0 ? `你被搜走了${loss}金，然后被扔出了镇门。` : `他们没搜到值钱的东西，大笑着把你扔出了镇门。`);
   } };
 }
 
@@ -871,7 +871,7 @@ function playerAction() {
   if (f && (f.type === 'villager' || f.friendly)) { talkTo(f); return; }
   const tx = player.x + DX[player.dir], ty = player.y + DY[player.dir];
   if (at(tx, ty) === T.DOOR) { interactDoor(buildings[bmap[ty * MW + tx]]); return; }
-  if (at(player.x, player.y) === T.BARREL) { say('', 'Cramped, dark, and smells of pickled herring. Perfect.'); return; }
+  if (at(player.x, player.y) === T.BARREL) { say('', '又挤又黑，还有股腌鲱鱼味。完美。'); return; }
 }
 
 // ====================================================================
@@ -890,7 +890,7 @@ function update(dt) {
   }
   if (mode === 'dialogue') {
     const c = dlg.cur;
-    if (c && dlg.shown < c.text.length) { const before = Math.floor(dlg.shown); dlg.shown = Math.min(c.text.length, dlg.shown + dt * 48); if (Math.floor(dlg.shown) !== before && Math.floor(dlg.shown) % 3 === 0) sfx.blip(); }
+    if (c && dlg.shown < c.text.length) { const before = Math.floor(dlg.shown); dlg.shown = Math.min(c.text.length, dlg.shown + dt * 26); if (Math.floor(dlg.shown) !== before && Math.floor(dlg.shown) % 2 === 0) sfx.blip(); }
     if (c && c.choices && dlg.shown >= c.text.length) {
       if (pressed.up) { dlg.choice = (dlg.choice + c.choices.length - 1) % c.choices.length; sfx.blip(); }
       if (pressed.down) { dlg.choice = (dlg.choice + 1) % c.choices.length; sfx.blip(); }
@@ -1045,26 +1045,27 @@ function render() {
 }
 
 // ---------- UI (full-res, pixel font) ----------
-const FONT = '"Press Start 2P", monospace';
+const FONT = '"Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif';
+const PIXFONT = '"Press Start 2P", monospace';
 function panel(x, y, w, h) {
   ctx.fillStyle = '#0c0a18'; ctx.fillRect(x - 3, y - 3, w + 6, h + 6);
   ctx.fillStyle = '#e8e4f8'; ctx.fillRect(x, y, w, h);
   ctx.fillStyle = '#1e2a6a'; ctx.fillRect(x + 4, y + 4, w - 8, h - 8);
   ctx.fillStyle = '#2a3a8a'; ctx.fillRect(x + 4, y + 4, w - 8, 3);
 }
-function text(s, x, y, size = 16, col = '#fff', align = 'left') {
-  ctx.font = `${size}px ${FONT}`; ctx.textAlign = align; ctx.textBaseline = 'top';
+function text(s, x, y, size = 16, col = '#fff', align = 'left', font = FONT) {
+  ctx.font = `${size}px ${font}`; ctx.textAlign = align; ctx.textBaseline = 'top';
   ctx.fillStyle = '#000'; ctx.fillText(s, x + 3, y + 3);
   ctx.fillStyle = col; ctx.fillText(s, x, y);
 }
 function wrap(s, maxW, size) {
   ctx.font = `${size}px ${FONT}`;
-  const out = [];
+  const out = [], noStart = '，。！？、；：）」』”……—';
   for (const para of s.split('\n')) {
     let line = '';
-    for (const w of para.split(' ')) {
-      const t = line ? line + ' ' + w : w;
-      if (ctx.measureText(t).width > maxW && line) { out.push(line); line = w; } else line = t;
+    for (const ch of para) {
+      const t = line + ch;
+      if (ctx.measureText(t).width > maxW && line && !noStart.includes(ch)) { out.push(line); line = ch === ' ' ? '' : ch; } else line = t;
     }
     out.push(line);
   }
@@ -1076,45 +1077,45 @@ function drawUI() {
   const cx = 34, cy = 26;
   ctx.fillStyle = '#8a6a10'; ctx.fillRect(cx - 2, cy, 26, 24); ctx.fillStyle = '#ffd840'; ctx.fillRect(cx, cy + 2, 22, 20);
   ctx.fillStyle = '#fff4a0'; ctx.fillRect(cx + 3, cy + 5, 4, 8); ctx.fillStyle = '#c89a20'; ctx.fillRect(cx + 9, cy + 6, 4, 12);
-  text(String(gold), 68, 28, 18, '#ffe060');
+  text(String(gold), 68, 28, 18, '#ffe060', 'left', PIXFONT);
   // bag
   if (bag.length) {
     const names = bag.map(i => i.name);
     const lines = [];
     for (let i = 0; i < names.length; i += 1) lines.push(names[i]);
-    const h = 18 + lines.length * 16;
+    const h = 18 + lines.length * 20;
     panel(14, 70, 230, h);
-    lines.forEach((l, i) => text('- ' + l, 26, 80 + i * 16, 9, bag[i].key ? '#ffe060' : '#d8e0ff'));
+    lines.forEach((l, i) => text('· ' + l, 26, 79 + i * 20, 13, bag[i].key ? '#ffe060' : '#d8e0ff'));
   }
   // stance
   const hid = isHidden();
-  const st = hid ? 'HIDDEN' : player.crouch ? 'CROUCH' : '';
-  if (st) { panel(960 - 14 - 150, 14, 150, 40); text(st, 960 - 14 - 75, 27, 12, hid ? '#80f0a0' : '#c8d0ff', 'center'); }
+  const st = hid ? '隐藏中' : player.crouch ? '潜行中' : '';
+  if (st) { panel(960 - 14 - 150, 14, 150, 40); text(st, 960 - 14 - 75, 24, 16, hid ? '#80f0a0' : '#c8d0ff', 'center'); }
   // chase warning
-  if (mode === 'play' && npcs.some(n => n.state === 'chase')) { const a = 0.6 + 0.4 * Math.sin(time * 10); text('RUN!', 480, 24, 20, `rgba(255,80,60,${a})`, 'center'); }
+  if (mode === 'play' && npcs.some(n => n.state === 'chase')) { const a = 0.6 + 0.4 * Math.sin(time * 10); text('快跑！', 480, 22, 24, `rgba(255,80,60,${a})`, 'center'); }
 
   // contextual prompt
   if (mode === 'play' && !player.moving) {
     let p = '';
-    if (behindTarget()) p = 'SPACE: Pickpocket';
+    if (behindTarget()) p = '空格：扒窃';
     else { const f = facingNPC(); const tx = player.x + DX[player.dir], ty = player.y + DY[player.dir];
-      if (f && (f.type === 'villager' || f.friendly)) p = 'SPACE: Talk';
-      else if (at(tx, ty) === T.DOOR) p = 'SPACE: ' + buildings[bmap[ty * MW + tx]].name; }
-    if (p) { ctx.font = `12px ${FONT}`; const w = ctx.measureText(p).width + 36; panel(480 - w / 2, 610, w, 40); text(p, 480, 624, 12, '#fff', 'center'); }
+      if (f && (f.type === 'villager' || f.friendly)) p = '空格：交谈';
+      else if (at(tx, ty) === T.DOOR) p = '空格：' + buildings[bmap[ty * MW + tx]].name; }
+    if (p) { ctx.font = `16px ${FONT}`; const w = ctx.measureText(p).width + 36; panel(480 - w / 2, 606, w, 44); text(p, 480, 619, 16, '#fff', 'center'); }
   }
 
   if (showHelp) {
     panel(200, 120, 560, 300);
-    const L = ['CONTROLS', '', 'Arrows / WASD .. move (tap to turn)', 'Shift (hold)/C . crouch', 'Space / E ...... act / talk / enter', 'H .............. this panel', '',
-      'Stand directly BEHIND someone,', 'facing their back, to pickpocket.', 'Crouch in a bush or climb into a', 'barrel to vanish from sight.'];
-    L.forEach((l, i) => text(l, 230, 145 + i * 24, i === 0 ? 14 : 11, i === 0 ? '#ffe060' : '#e8e8ff'));
+    const L = ['操作说明', '', '方向键 / WASD：移动（轻点转向）', '按住 Shift / 按 C：潜行', '空格 / E：行动 / 交谈 / 进入', 'H：打开 / 关闭本面板', '',
+      '站在目标正后方、面朝其背后，', '即可扒窃。', '在草丛中潜行，或钻进木桶，', '就能从视线中消失。'];
+    L.forEach((l, i) => text(l, 230, 140 + i * 25, i === 0 ? 18 : 15, i === 0 ? '#ffe060' : '#e8e8ff'));
   }
 
   // minigame
   if (mode === 'minigame') {
     const x = 230, y = 470, w = 500, h = 90;
     panel(x, y, w, h);
-    text(`Lifting ${mg.target.name}'s purse...`, x + 20, y + 16, 11, '#e8e8ff');
+    text(`正在摸${mg.target.name}的钱袋……`, x + 20, y + 12, 15, '#e8e8ff');
     const bx = x + 20, by = y + 44, bw = w - 40, bh = 24;
     ctx.fillStyle = '#0c0a18'; ctx.fillRect(bx - 3, by - 3, bw + 6, bh + 6);
     ctx.fillStyle = '#5a2030'; ctx.fillRect(bx, by, bw, bh);
@@ -1122,26 +1123,26 @@ function drawUI() {
     ctx.fillStyle = '#90f0a0'; ctx.fillRect(bx + (mg.zone + mg.zoneW * 0.4) * bw, by, mg.zoneW * 0.2 * bw, bh);
     const cxp = bx + mg.pos * bw;
     ctx.fillStyle = '#fff'; ctx.fillRect(cxp - 3, by - 8, 6, bh + 16); ctx.fillStyle = '#000'; ctx.fillRect(cxp - 1, by - 6, 2, bh + 12);
-    if (mg.result) { panel(x + 60, y - 56, w - 120, 44); text(mg.msg, x + w / 2, y - 42, 11, mg.result === 'ok' ? '#ffe060' : '#ff7060', 'center'); }
-    else text('SPACE!', x + w - 20, y + 16, 11, '#ffe060', 'right');
+    if (mg.result) { panel(x + 60, y - 56, w - 120, 44); text(mg.msg, x + w / 2, y - 44, 15, mg.result === 'ok' ? '#ffe060' : '#ff7060', 'center'); }
+    else text('按空格！', x + w - 20, y + 12, 15, '#ffe060', 'right');
   }
 
   // dialogue
   if (mode === 'dialogue' && dlg.cur) {
     const c = dlg.cur, x = 24, y = 672 - 168, w = 912, h = 150;
     panel(x, y, w, h);
-    if (c.name) { ctx.font = `12px ${FONT}`; const nw = ctx.measureText(c.name).width + 32; panel(x + 16, y - 34, nw, 34); text(c.name, x + 32, y - 22, 12, '#ffe060'); }
-    const lines = wrap(c.text.slice(0, Math.floor(dlg.shown)), w - 56, 14);
-    lines.slice(0, 5).forEach((l, i) => text(l, x + 28, y + 24 + i * 26, 14, '#fff'));
+    if (c.name) { ctx.font = `16px ${FONT}`; const nw = ctx.measureText(c.name).width + 32; panel(x + 16, y - 38, nw, 38); text(c.name, x + 32, y - 26, 16, '#ffe060'); }
+    const lines = wrap(c.text.slice(0, Math.floor(dlg.shown)), w - 56, 20);
+    lines.slice(0, 4).forEach((l, i) => text(l, x + 28, y + 22 + i * 30, 20, '#fff'));
     const done = dlg.shown >= c.text.length;
     if (done && c.choices) {
-      ctx.font = `12px ${FONT}`;
-      const cw = Math.max(...c.choices.map(o => ctx.measureText(o.label).width)) + 70, ch = c.choices.length * 28 + 24;
+      ctx.font = `16px ${FONT}`;
+      const cw = Math.max(...c.choices.map(o => ctx.measureText(o.label).width)) + 70, ch = c.choices.length * 30 + 24;
       const cxx = x + w - cw - 8, cyy = y - ch - 10;
       panel(cxx, cyy, cw, ch);
       c.choices.forEach((o, i) => {
         const sel = i === dlg.choice;
-        text((sel ? '> ' : '  ') + o.label, cxx + 18, cyy + 16 + i * 28, 12, sel ? '#ffe060' : '#c8d0ff');
+        text((sel ? '▶ ' : '   ') + o.label, cxx + 18, cyy + 14 + i * 30, 16, sel ? '#ffe060' : '#c8d0ff');
       });
     } else if (done && Math.floor(time * 3) % 2) {
       ctx.fillStyle = '#ffe060'; ctx.beginPath(); ctx.moveTo(x + w - 40, y + h - 32); ctx.lineTo(x + w - 24, y + h - 32); ctx.lineTo(x + w - 32, y + h - 22); ctx.fill();
@@ -1165,10 +1166,10 @@ function frame(now) {
 
 initNPCs();
 for (const n of npcs) n.cone = n.range ? coneTiles(n) : [];
-say('', 'You came to Millbrook to become a hero.');
-say('', 'You lost to a slime. Then to a goose. Then to the same slime, again.');
-say('', "Swords aren't your thing. But fingers... fingers you've got.");
-say('', 'Stay out of the yellow vision cones. Sneak up BEHIND people and press SPACE to lift their purse. Hold SHIFT to crouch; crouch in bushes or hop into barrels to hide. Press H for controls.');
+say('', '你来到磨溪镇，梦想成为一名英雄。');
+say('', '结果你输给了一只史莱姆。然后输给了一只鹅。然后又输给了同一只史莱姆。');
+say('', '你不是耍剑的料。但这双手……这双手倒是挺灵巧。');
+say('', '别走进黄色的视野范围。悄悄绕到别人【身后】，按空格偷走钱袋。按住 SHIFT 潜行；在草丛里潜行或钻进木桶就能藏身。按 H 查看操作说明。');
 grace = 1;
 const start = () => requestAnimationFrame(frame);
 if (document.fonts && document.fonts.ready) Promise.race([document.fonts.ready, new Promise(r => setTimeout(r, 1500))]).then(start); else start();
