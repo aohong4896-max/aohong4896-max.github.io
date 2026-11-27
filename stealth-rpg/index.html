@@ -59,9 +59,9 @@
 // ====================================================================
 //  CONSTANTS
 // ====================================================================
-const TOUCH = (window.matchMedia && matchMedia('(pointer: coarse)').matches) || ('ontouchstart' in window && navigator.maxTouchPoints > 0);
+let TOUCH = (window.matchMedia && (matchMedia('(pointer: coarse)').matches || matchMedia('(any-pointer: coarse)').matches)) || navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
 if (TOUCH) document.body.classList.add('touch');
-const K_ACT = TOUCH ? '行动' : '空格';
+let K_ACT = TOUCH ? '行动' : '空格';
 const TS = 16, SCALE = 3;
 const VW = 20, VH = 14;                // view size in tiles
 const BW = VW * TS, BH = VH * TS;      // low-res buffer
@@ -884,7 +884,10 @@ function tRelease(k) { keys[k] = false; dirStack = dirStack.filter(d => d !== k)
 function unlockAudio() {
   try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === 'suspended') actx.resume(); } catch (e) {}
 }
-if (TOUCH) {
+let touchReady = false;
+function enableTouch() {
+  if (touchReady) return; touchReady = true;
+  TOUCH = true; K_ACT = '行动'; document.body.classList.add('touch');
   const pad = document.getElementById('dpad');
   const arrows = { up: pad.querySelector('.u'), down: pad.querySelector('.d'), left: pad.querySelector('.l'), right: pad.querySelector('.r') };
   let padDir = null, padId = null;
@@ -917,6 +920,10 @@ if (TOUCH) {
   document.addEventListener('contextmenu', e => e.preventDefault());
   document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
 }
+if (TOUCH) enableTouch();
+// fallback: any real touch turns the on-screen controls on
+addEventListener('touchstart', () => enableTouch(), { once: true, passive: true });
+addEventListener('pointerdown', e => { if (e.pointerType === 'touch') enableTouch(); }, { passive: true });
 
 let holdT = 0, lastHeld = -1;
 function updatePlayer(dt) {
